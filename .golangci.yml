@@ -1,0 +1,6 @@
+run:
+  timeout: 3m
+linters:
+  disable-all: true
+  enable:
+    - revive

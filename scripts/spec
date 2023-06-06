@@ -1,0 +1,67 @@
+#!/usr/bin/env ruby
+
+spec = File.read("docs/SPEC.md")
+spec.gsub!(/\t/, "  ")
+
+# read the TOC and existing footnotes
+toc_text = spec[/<!-- TOC -->(.*?)<!-- \/TOC -->/m, 1]
+toc = toc_text.strip.split(/\n/).map { |w| w.strip[2..].match(/\[(.*?)\]\((.*?)\)/) }.map { |m| [m[1], m[2]] }
+
+data_toc = toc.dup.drop_while { |t| !t[0].end_with?("Data") }
+# remove data section
+data_toc.shift
+footnotes = spec.scan(/\[\^(.*?)\]:/).flatten
+
+# check existing links
+spec.gsub!(/\[[^\]]*?\]\(.*?\)/) do |w|
+  # p w
+  m = w.match(/\[(.*?)\]\((.*?)\)/)
+  if m[2][/\.png/]
+    w
+  else
+    toc_match = toc.find { |t| t[0] == m[1] }
+    if !toc_match
+      match = m[1].match(/(\d+\.\s+)?(.*)/)
+      text = match[2]
+      toc_match = toc.find { |t| puts "checking .. `#{t[0]}' against text"; t[0].end_with? text }
+      if !toc_match
+        puts "cannot find a toc match for `#{text}'!"
+        exit
+      end
+    end
+    data_toc.include?(toc_match) ? "[#{toc_match[0][/\d+\.\s+(.*)/, 1]}](#{toc_match[1]})" : "[#{toc_match[0]}](#{toc_match[1]})"
+  end
+end
+
+# # check non links
+spec.gsub!(/\[[^^][^\]]*?\](?!\()/) do |w|
+  text = w[/\[(\d+\.\s+)?([^\]]*)\]/, 2]
+
+  if text[0] == ?"
+    w
+  elsif text == ''
+    w
+  elsif text == "32" || text == "uint64"
+    w
+  else
+    toc_match = data_toc.find { |t|
+      t[0].downcase.end_with? text
+    }
+    if !toc_match
+      puts "cannot find a toc match for `#{w}'!"
+      exit
+    end
+    "[#{toc_match[0][/\d+\.\s+(.*)/, 1]}](#{toc_match[1]})"
+  end
+end
+
+# # check footnote links links
+
+spec.scan(/\[\^.*?\](?!\()/) do |w|
+  puts w
+end
+
+spec.sub!(/<!-- TOC -->(.*?)<!-- \/TOC -->/m, "<!-- TOC -->#{toc_text}<!-- \/TOC -->")
+
+puts "writing!"
+File.write("docs/SPEC2.md", spec)

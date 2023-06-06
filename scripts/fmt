@@ -1,0 +1,3 @@
+#!/bin/sh
+
+go fmt github.com/meow-io/go-slick/...

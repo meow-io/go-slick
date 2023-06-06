@@ -1,0 +1,55 @@
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - main
+name: Test
+env:
+  POSTGRES_HOST: postgres
+  REDIS_HOST: redis
+  DEBUG: 1
+jobs:
+  container-job:
+    # Containers must run in Linux based operating systems
+    runs-on: ubuntu-20.04
+    # Docker Hub image that `container-job` executes in
+    container: ubuntu:20.04
+    # Service containers to run with `container-job`
+    services:
+      # Label used to access the service container
+      postgres:
+        # Docker Hub image
+        image: postgres
+        # Provide the password for postgres
+        env:
+          POSTGRES_USER: heya_development
+          POSTGRES_PASSWORD: heya
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      # Label used to access the service container
+      redis:
+        # Docker Hub image
+        image: redis
+        # Set health checks to wait until redis has started
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/setup-go@v4
+      with:
+        go-version: 1.20.x
+    - uses: actions/checkout@v3
+    - run: apt update -y
+    - run: apt install -y build-essential binutils binutils-dev libgcc1 libc6 gcc
+    - name: Build
+      run: go build -v ./...
+    - run: go test github.com/meow-io/go-slick/... -v -timeout 60s
