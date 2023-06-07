@@ -44,7 +44,7 @@ s := slick.NewSlick(conf)
 
 ### Define your schema
 
-First, define a schema for your data. This is much like a regular SQLite table, with a few extra columns. For instance, a table named `messages` can be created with the
+First, define a schema for your data. This is much like a regular SQLite table, with a few extra columns. For instance, a table named `messages` can be created using
 
 ```go
 
