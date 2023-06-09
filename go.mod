@@ -3,7 +3,7 @@ module github.com/meow-io/go-slick
 go 1.20
 
 require (
-	github.com/egagnon77/go-sqlcipher/v4 v4.5.4
+	github.com/joshbuddy/go-sqlcipher/v4 v4.5.3
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/joshbuddy/jpake v0.0.0-20230530080604-b04d6e53e4e4

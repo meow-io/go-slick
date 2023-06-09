@@ -13,7 +13,7 @@ import (
 	"time"
 
 	// adds sqlcipher support
-	_ "github.com/egagnon77/go-sqlcipher/v4"
+	sqlite3 "github.com/joshbuddy/go-sqlcipher/v4"
 	"github.com/meow-io/go-slick/config"
 	"github.com/meow-io/go-slick/migration"
 	"go.uber.org/zap"
@@ -44,6 +44,27 @@ type Database struct {
 	beforeCommitCallbacks []func() error
 	ctx                   context.Context
 	cancelFn              context.CancelFunc
+}
+
+func init() {
+	sql.Register("sqlite3_eav",
+		&sqlite3.SQLiteDriver{
+			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+				if err := conn.RegisterFunc("eav_get", eavGet, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_set", eavSet, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_has", eavHas, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_mtime", eavMtime, true); err != nil {
+					return err
+				}
+				return nil
+			},
+		})
 }
 
 func NewDatabase(c *config.Config, path string) (*Database, error) {
@@ -247,7 +268,7 @@ func (db *Database) RunReadOnly(label string, runner runnerFunc) error {
 
 func (db *Database) setupConnection(key []byte) (*sqlx.DB, error) {
 	formattedPath := fmt.Sprintf("file:%s?_locking_mode=EXCLUSIVE&_busy_timeout=100&_secure_delete=on&_journal_mode=WAL&_auto_vacuum=2&_synchronous=3&cache=private&mode=rwc&_pragma_key=x'%x'", url.PathEscape(db.path), key)
-	conn, err := sqlx.Open("sqlite3", formattedPath)
+	conn, err := sqlx.Open("sqlite3_eav", formattedPath)
 	if err != nil {
 		return nil, fmt.Errorf("db: error opening %s %w", db.path, err)
 	}
