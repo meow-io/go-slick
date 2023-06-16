@@ -3,16 +3,16 @@ module github.com/meow-io/go-slick
 go 1.20
 
 require (
-	github.com/joshbuddy/go-sqlcipher/v4 v4.5.3
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/joshbuddy/jpake v0.0.0-20230530080604-b04d6e53e4e4
 	github.com/kevinburke/nacl v0.0.0-20210405173606-cd9060f5f776
-	github.com/meow-io/heya v0.0.0-20230605205746-90c0046ca8a8
+	github.com/meow-io/go-sqlcipher v1.0.1
+	github.com/meow-io/heya v0.0.0-20230606080709-8b8c7378db5b
 	github.com/status-im/doubleratchet v3.0.0+incompatible
 	github.com/stretchr/testify v1.8.3
 	go.uber.org/zap v1.24.0
-	golang.org/x/crypto v0.9.0
+	golang.org/x/crypto v0.10.0
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
@@ -34,9 +34,9 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/mod v0.10.0 // indirect
-	golang.org/x/net v0.10.0 // indirect
-	golang.org/x/sys v0.8.0 // indirect
-	golang.org/x/text v0.9.0 // indirect
+	golang.org/x/net v0.11.0 // indirect
+	golang.org/x/sys v0.9.0 // indirect
+	golang.org/x/text v0.10.0 // indirect
 	golang.org/x/tools v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

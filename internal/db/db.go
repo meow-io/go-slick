@@ -13,9 +13,9 @@ import (
 	"time"
 
 	// adds sqlcipher support
-	sqlite3 "github.com/joshbuddy/go-sqlcipher/v4"
 	"github.com/meow-io/go-slick/config"
 	"github.com/meow-io/go-slick/migration"
+	sqlite3 "github.com/meow-io/go-sqlcipher"
 	"go.uber.org/zap"
 
 	"github.com/jmoiron/sqlx"
