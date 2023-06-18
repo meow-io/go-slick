@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+
+	"github.com/meow-io/go-slick/clock"
 )
 
 const deletedFlag = 1
@@ -12,10 +14,6 @@ type eavValue struct {
 	time uint64
 	flag uint8
 	val  []byte
-}
-
-func MakeEAVEmptyRecord() []byte {
-	return []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 }
 
 func EAVPack(nameIdx uint32, ts uint64, null bool, val []byte) []byte {
@@ -44,23 +42,55 @@ func EAVPack(nameIdx uint32, ts uint64, null bool, val []byte) []byte {
 // pos is relative to after-header
 // time is microseconds
 
-func eavMtime(in []byte) (float64, error) {
+func appendHeaderValues(header, values []byte, nameIdx uint32, flags uint8, ts uint64, val []byte) ([]byte, []byte) {
+	header = binary.BigEndian.AppendUint32(header, nameIdx)
+	header = binary.BigEndian.AppendUint32(header, uint32(len(values)))
+	header = append(header, flags)
+	values = binary.BigEndian.AppendUint32(values, uint32(len(val)))
+	values = binary.BigEndian.AppendUint64(values, ts)
+	values = append(values, val...)
+	return header, values
+}
+
+func microToFloat(ts uint64) float64 {
+	return float64(ts) / 1000000
+}
+
+type eav struct {
+	cl clock.Clock
+}
+
+func (eav *eav) MakeEmptyRecord() []byte {
+	rec := []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	rec = binary.BigEndian.AppendUint64(rec, eav.cl.CurrentTimeMicro())
+	return rec
+}
+
+func (eav *eav) eavWtime(id []byte) (float64, error) {
+	return microToFloat(binary.BigEndian.Uint64(id[0:8])), nil
+}
+
+func (eav *eav) eavCtime(id []byte) (float64, error) {
+	return microToFloat(binary.BigEndian.Uint64(id[0:8])), nil
+}
+
+func (eav *eav) eavMtime(in []byte) (float64, error) {
 	version := in[0]
 	if version != 0 {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
 	}
-	// mtime := binary.BigEndian.Uint64(in[3:])
-	return 0, nil
+	mtime := binary.BigEndian.Uint64(in[3:])
+	return microToFloat(mtime), nil
 }
 
-func eavHas(in []byte, targets ...uint32) (int, error) {
+func (eav *eav) eavHas(in []byte, targets ...uint32) (int, error) {
 	sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
 	version := in[0]
 	if version != 0 {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
 	}
 	c := binary.BigEndian.Uint16(in[1:])
-	pos := uint32(11)
+	pos := uint32(19)
 	targetIdx := 0
 	for i := uint16(0); i != c; i++ {
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
@@ -79,7 +109,7 @@ func eavHas(in []byte, targets ...uint32) (int, error) {
 	return 1, nil
 }
 
-func eavGet(in []byte, target uint32) (interface{}, error) {
+func (eav *eav) eavGet(in []byte, target uint32) (interface{}, error) {
 	// read number of names
 	// scroll through list till you find your name
 	version := in[0]
@@ -87,7 +117,7 @@ func eavGet(in []byte, target uint32) (interface{}, error) {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
 	}
 	c := binary.BigEndian.Uint16(in[1:])
-	pos := uint32(11)
+	pos := uint32(19)
 	found := false
 	for i := uint16(0); i != c; i++ {
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
@@ -106,27 +136,17 @@ func eavGet(in []byte, target uint32) (interface{}, error) {
 	if !found {
 		return nil, nil
 	}
-	headerLen := uint32(11 + c*9)
+	headerLen := uint32(19 + c*9)
 	valuePos := binary.BigEndian.Uint32(in[pos+4:])
 	valueLen := binary.BigEndian.Uint32(in[headerLen+valuePos:])
 	value := in[headerLen+valuePos+12 : headerLen+valuePos+12+valueLen]
 	return value, nil
 }
 
-func appendHeaderValues(header, values []byte, nameIdx uint32, flags uint8, ts uint64, val []byte) ([]byte, []byte) {
-	header = binary.BigEndian.AppendUint32(header, nameIdx)
-	header = binary.BigEndian.AppendUint32(header, uint32(len(values)))
-	header = append(header, flags)
-	values = binary.BigEndian.AppendUint32(values, uint32(len(val)))
-	values = binary.BigEndian.AppendUint64(values, ts)
-	values = append(values, val...)
-	return header, values
-}
-
 // triples is name idx (be uint32), time (be uin64), val (n-bytes)
-func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
+func (eav *eav) eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 	var currentCount uint16
-	var currentMtime uint64
+	var currentMtime, currentWtime uint64
 	if len(in) != 0 {
 		version := in[0]
 		if version != 0 {
@@ -134,8 +154,9 @@ func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 		}
 		currentCount = binary.BigEndian.Uint16(in[1:])
 		currentMtime = binary.BigEndian.Uint64(in[3:])
+		currentWtime = binary.BigEndian.Uint64(in[11:])
 	}
-	currentHeaderLen := uint32(11 + currentCount*9)
+	currentHeaderLen := uint32(19 + currentCount*9)
 	// assemble vals
 	newValsLen := len(packed)
 	nameIndexes := make([]uint32, newValsLen)
@@ -152,6 +173,7 @@ func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 	sort.Slice(nameIndexes, func(i, j int) bool { return nameIndexes[i] < nameIndexes[j] })
 	// construct new header
 	count := uint16(0)
+	updated := false
 	namePos := 0
 	newHeader := make([]byte, 0, currentCount+uint16((newValsLen)*9))
 	var newValues []byte
@@ -159,7 +181,7 @@ func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 		newValues = make([]byte, 0, (len(in)-2-int(currentCount)*8)*2)
 	}
 	for i := uint16(0); i != currentCount; i++ {
-		pos := i*9 + 11
+		pos := i*9 + 19
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
 		valuePos := binary.BigEndian.Uint32(in[pos+4:])
 		flags := in[8]
@@ -172,6 +194,7 @@ func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 					currentMtime = newValue.time
 				}
 				newHeader, newValues = appendHeaderValues(newHeader, newValues, nameIdx, newValue.flag, newValue.time, newValue.val)
+				updated = true
 			} else {
 				currentValue := in[currentHeaderLen+valuePos+12 : currentHeaderLen+valuePos+12+currentLen]
 				newHeader, newValues = appendHeaderValues(newHeader, newValues, nameIdx, flags, currentTime, currentValue)
@@ -187,6 +210,7 @@ func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 				currentMtime = val.time
 			}
 			newHeader, newValues = appendHeaderValues(newHeader, newValues, nameIndexes[namePos], val.flag, val.time, val.val)
+			updated = true
 			count++
 			namePos++
 		}
@@ -204,13 +228,20 @@ func eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 			currentMtime = val.time
 		}
 		newHeader, newValues = appendHeaderValues(newHeader, newValues, nameIndexes[namePos], val.flag, val.time, val.val)
+		updated = true
 		count++
 		namePos++
 	}
-	ret := make([]byte, 0, len(newHeader)+len(newValues)+11)
+	ret := make([]byte, 0, len(newHeader)+len(newValues)+19)
 	ret = append(ret, 0)
 	ret = binary.BigEndian.AppendUint16(ret, count)
 	ret = binary.BigEndian.AppendUint64(ret, currentMtime)
+	if updated {
+		newWtime := eav.cl.CurrentTimeMicro()
+		ret = binary.BigEndian.AppendUint64(ret, newWtime)
+	} else {
+		ret = binary.BigEndian.AppendUint64(ret, currentWtime)
+	}
 	ret = append(ret, newHeader...)
 	ret = append(ret, newValues...)
 	return ret, nil

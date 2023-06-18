@@ -44,7 +44,7 @@ func newEAV() *EAV {
 	groupID = [16]byte{0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7}
 	lastTimestampID = currentTime
 	config := config.NewConfig()
-	db, err := db.NewDatabase(config, "test1")
+	db, err := db.NewDatabase(config, clock.NewSystemClock(), "test1")
 	if err != nil {
 		panic(err)
 	}

@@ -169,7 +169,8 @@ func NewSlick(c *config.Config) (*Slick, error) {
 	if err := os.MkdirAll(c.RootDir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := db.NewDatabase(c, path.Join(c.RootDir, "data"))
+	cl := clock.NewSystemClock()
+	db, err := db.NewDatabase(c, cl, path.Join(c.RootDir, "data"))
 	if err != nil {
 		return nil, err
 	}

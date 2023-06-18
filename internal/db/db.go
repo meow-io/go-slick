@@ -13,6 +13,7 @@ import (
 	"time"
 
 	// adds sqlcipher support
+	"github.com/meow-io/go-slick/clock"
 	"github.com/meow-io/go-slick/config"
 	"github.com/meow-io/go-slick/migration"
 	sqlite3 "github.com/meow-io/go-sqlcipher"
@@ -46,28 +47,7 @@ type Database struct {
 	cancelFn              context.CancelFunc
 }
 
-func init() {
-	sql.Register("sqlite3_eav",
-		&sqlite3.SQLiteDriver{
-			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-				if err := conn.RegisterFunc("eav_get", eavGet, true); err != nil {
-					return err
-				}
-				if err := conn.RegisterFunc("eav_set", eavSet, true); err != nil {
-					return err
-				}
-				if err := conn.RegisterFunc("eav_has", eavHas, true); err != nil {
-					return err
-				}
-				if err := conn.RegisterFunc("eav_mtime", eavMtime, true); err != nil {
-					return err
-				}
-				return nil
-			},
-		})
-}
-
-func NewDatabase(c *config.Config, path string) (*Database, error) {
+func NewDatabase(c *config.Config, cl clock.Clock, path string) (*Database, error) {
 	log := c.Logger("db")
 	log.Debugf("making database at %s", path)
 
@@ -85,6 +65,7 @@ func NewDatabase(c *config.Config, path string) (*Database, error) {
 
 	ctx, cancelFn := context.WithCancel(context.TODO())
 	db := &Database{Conn: nil, Log: log, config: c, path: path, state: state, lock: &sync.Mutex{}, ctx: ctx, cancelFn: cancelFn}
+	db.registerDriver(cl)
 	return db, nil
 }
 
@@ -288,4 +269,39 @@ func (db *Database) setupConnection(key []byte) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("db: error setting foreign_keys to ON: %w", err)
 	}
 	return conn, nil
+}
+
+func (db *Database) registerDriver(cl clock.Clock) {
+	drivers := sql.Drivers()
+	for _, d := range drivers {
+		if d == "sqlite3_eav" {
+			return
+		}
+	}
+
+	e := eav{cl}
+	sql.Register("sqlite3_eav",
+		&sqlite3.SQLiteDriver{
+			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+				if err := conn.RegisterFunc("eav_get", e.eavGet, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_set", e.eavSet, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_has", e.eavHas, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_mtime", e.eavMtime, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_ctime", e.eavCtime, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_wtime", e.eavWtime, true); err != nil {
+					return err
+				}
+				return nil
+			},
+		})
 }
