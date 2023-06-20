@@ -83,7 +83,7 @@ func TestApplyOperationsBeforeSchema(t *testing.T) {
 			AddInt64(entityID, 0, "message_age", 23).
 			AddFloat64(entityID, 0, "message_height", 23.23))
 		require.Nil(err)
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -113,12 +113,10 @@ func TestApplyOperationsBeforeSchema(t *testing.T) {
 			Indexes: make([][]string, 0),
 		}))
 		require.Nil(err)
-
 		result, err := eav.Query("select id, body, age, height, blob from messages")
 		require.Nil(err)
 		require.Equal(1, len(result.Rows))
 		require.Equal("hi there", result.Rows[0][1])
-
 		return nil
 	}))
 }
@@ -129,7 +127,7 @@ func TestCreateTableTwice(t *testing.T) {
 	defer shutdownEAV(eav)
 
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -141,7 +139,7 @@ func TestCreateTableTwice(t *testing.T) {
 			Indexes: make([][]string, 0),
 		}))
 
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -163,7 +161,7 @@ func TestApplyOperationsAfterSchema(t *testing.T) {
 	defer shutdownEAV(eav)
 
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -216,7 +214,7 @@ func TestApplyOperationsOnCreate(t *testing.T) {
 	defer shutdownEAV(eav)
 
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -276,7 +274,7 @@ func TestApplyPartialOperation(t *testing.T) {
 	defer shutdownEAV(eav)
 
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -336,7 +334,7 @@ func TestGeneratedColumns(t *testing.T) {
 	defer shutdownEAV(eav)
 
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -377,7 +375,7 @@ func TestApplyPrivateNames(t *testing.T) {
 	defer shutdownEAV(eav)
 
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "_private_message_body",
@@ -432,7 +430,7 @@ func TestSelect(t *testing.T) {
 			AddFloat64(entityID, 0, "message_height", 23.23))
 		require.Nil(err)
 
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -493,7 +491,7 @@ func TestVisibilitySplitting(t *testing.T) {
 			AddFloat64(entityID, 0, "message_height", 23.23))
 		require.Nil(err)
 		require.Equal(len(groupOps.nameMap), 2)
-		require.Equal(groupOps.OperationMap, map[uint64]map[ids.ID]map[uint64]Value{
+		require.Equal(groupOps.OperationMap, map[uint64]map[ids.ID]map[uint32]Value{
 			0: {
 				entityID: {
 					groupOps.nameMap["message_age"]:    NewInt64Value(23),
@@ -502,7 +500,7 @@ func TestVisibilitySplitting(t *testing.T) {
 			},
 		})
 		require.Equal(len(selfOps.nameMap), 1)
-		require.Equal(selfOps.OperationMap, map[uint64]map[ids.ID]map[uint64]Value{
+		require.Equal(selfOps.OperationMap, map[uint64]map[ids.ID]map[uint32]Value{
 			0: {
 				entityID: {
 					selfOps.nameMap["_self_message_blob"]: NewBytesValue([]byte{0, 1, 2, 3}),
@@ -527,7 +525,7 @@ func TestAlterTable(t *testing.T) {
 			AddInt64(entityID, 0, "message_age", 23).
 			AddFloat64(entityID, 0, "message_height", 23.23))
 		require.Nil(err)
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -564,12 +562,33 @@ func TestAlterTable(t *testing.T) {
 		return nil
 	}))
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.AlterTableAddColumns("messages", map[string]*ColumnDefinition{
-			"height": {
-				SourceName: "message_height",
-				ColumnType: Real,
-				Nullable:   true,
+		require.Nil(eav.CreateView("messages", &TableDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+				"age": {
+					SourceName: "message_age",
+					ColumnType: Int,
+					Required:   true,
+					Nullable:   false,
+				},
+				"blob": {
+					SourceName: "message_blob",
+					ColumnType: Blob,
+					Required:   true,
+					Nullable:   false,
+				},
+				"height": {
+					SourceName: "message_height",
+					ColumnType: Real,
+					Nullable:   true,
+				},
 			},
+			Indexes: [][]string{{"body"}},
 		}))
 		return nil
 	}))
@@ -607,7 +626,7 @@ func TestUnicodeRoundtrip(t *testing.T) {
 			AddString(entityID, 0, "message_body", "hi there 🫣"))
 		require.Nil(err)
 
-		require.Nil(eav.CreateTable("messages", &TableDefinition{
+		require.Nil(eav.CreateView("messages", &TableDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",

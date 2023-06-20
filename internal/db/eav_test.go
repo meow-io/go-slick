@@ -33,9 +33,9 @@ func (tc *testClock) AdvanceMicros(a uint64) {
 
 func TestSimpleAdd(t *testing.T) {
 	require := require.New(t)
-	e := eav{&testClock{0}}
+	e := EAV{&testClock{0}}
 	empty := e.MakeEmptyRecord()
-	e.cl.(*testClock).AdvanceMicros(65535)
+	e.Clock.(*testClock).AdvanceMicros(65535)
 	newBytes, err := e.eavSet(empty, EAVPack(0, 0, false, []byte("hello")))
 	require.Nil(err)
 	require.Equal([]byte{
@@ -54,9 +54,9 @@ func TestSimpleAdd(t *testing.T) {
 
 func TestSimpleNewValue(t *testing.T) {
 	require := require.New(t)
-	e := eav{&testClock{0}}
+	e := EAV{&testClock{0}}
 	empty := e.MakeEmptyRecord()
-	e.cl.(*testClock).AdvanceMicros(65535)
+	e.Clock.(*testClock).AdvanceMicros(65535)
 	newBytes, err := e.eavSet(empty, EAVPack(0, 0, false, []byte("hello")))
 	require.Nil(err)
 	newBytes, err = e.eavSet(newBytes, EAVPack(0, 1, false, []byte("there!")))
@@ -77,12 +77,12 @@ func TestSimpleNewValue(t *testing.T) {
 
 func TestSimpleOldValue(t *testing.T) {
 	require := require.New(t)
-	e := eav{&testClock{0}}
+	e := EAV{&testClock{0}}
 	empty := e.MakeEmptyRecord()
 	newBytes, err := e.eavSet(empty, EAVPack(0, 1, false, []byte("hello")))
 	require.Nil(err)
 	newBytes, err = e.eavSet(newBytes, EAVPack(0, 0, false, []byte("there!")))
-	e.cl.(*testClock).AdvanceMicros(65535)
+	e.Clock.(*testClock).AdvanceMicros(65535)
 	require.Nil(err)
 	require.Equal([]byte{
 		0x0,      // version
@@ -100,7 +100,7 @@ func TestSimpleOldValue(t *testing.T) {
 
 func TestDoubleValue(t *testing.T) {
 	require := require.New(t)
-	e := eav{&testClock{}}
+	e := EAV{&testClock{}}
 	newBytes, err := e.eavSet([]byte{
 		0x0,      // version
 		0x0, 0x1, // count
@@ -154,7 +154,7 @@ func TestGetValue(t *testing.T) {
 		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // time
 		't', 'h', 'e', 'r', 'e', '!',
 	}
-	e := eav{&testClock{}}
+	e := EAV{&testClock{}}
 	b1, err := e.eavGet(rec, 0)
 	require.Nil(err)
 	b2, err := e.eavGet(rec, 1)
@@ -165,7 +165,7 @@ func TestGetValue(t *testing.T) {
 
 func TestGetNullValue(t *testing.T) {
 	require := require.New(t)
-	e := eav{&testClock{}}
+	e := EAV{&testClock{}}
 	b, err := e.eavGet([]byte{
 		0x0,      // version
 		0x0, 0x1, // count
@@ -201,7 +201,7 @@ func TestHasValue(t *testing.T) {
 		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // time
 		't', 'h', 'e', 'r', 'e', '!',
 	}
-	e := eav{&testClock{}}
+	e := EAV{&testClock{}}
 	c, err := e.eavHas(in, 0, 1)
 	if err != nil {
 		t.Fatalf("error %#v", err)

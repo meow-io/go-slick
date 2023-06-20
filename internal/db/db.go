@@ -279,7 +279,7 @@ func (db *Database) registerDriver(cl clock.Clock) {
 		}
 	}
 
-	e := eav{cl}
+	e := EAV{cl}
 	sql.Register("sqlite3_eav",
 		&sqlite3.SQLiteDriver{
 			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
