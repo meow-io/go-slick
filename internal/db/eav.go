@@ -16,6 +16,8 @@ type EAVValue struct {
 	Val  []byte
 }
 
+type CallbackFunc func(viewName string, phase int, groupID, id []byte) error
+
 func EAVPack(nameIdx uint32, ts uint64, null bool, val []byte) []byte {
 	ret := make([]byte, 0, 13+len(val))
 	ret = binary.BigEndian.AppendUint32(ret, nameIdx)
@@ -59,8 +61,8 @@ func EAVExtractNameValues(in []byte) (map[uint32]*EAVValue, error) {
 // structure
 //
 // header
-// 1 2 8 441 441 441
-// version count mtime val pos flags
+// 1 2 8 8 441 441 441
+// version count mtime wtime val pos flags
 //
 // values
 // 4 8 n-bytes
@@ -85,6 +87,12 @@ func microToFloat(ts uint64) float64 {
 
 type EAV struct {
 	Clock clock.Clock
+
+	callback CallbackFunc
+}
+
+func (eav *EAV) SetCallback(r CallbackFunc) {
+	eav.callback = r
 }
 
 func (eav *EAV) MakeEmptyRecord() []byte {
@@ -102,12 +110,16 @@ func (eav *EAV) MakeRecord(packed ...[]byte) ([]byte, error) {
 	return rec, nil
 }
 
-func (eav *EAV) eavWtime(id []byte) (float64, error) {
-	return microToFloat(binary.BigEndian.Uint64(id[0:8])), nil
+func (eav *EAV) eavWtime(in []byte) (float64, error) {
+	version := in[0]
+	if version != 0 {
+		return 0, fmt.Errorf("expected version 0, got %d", version)
+	}
+	return microToFloat(binary.BigEndian.Uint64(in[11:])), nil
 }
 
 func (eav *EAV) eavCtime(id []byte) (float64, error) {
-	return microToFloat(binary.BigEndian.Uint64(id[0:8])), nil
+	return microToFloat(binary.BigEndian.Uint64(id)), nil
 }
 
 func (eav *EAV) eavMtime(in []byte) (float64, error) {
@@ -115,16 +127,15 @@ func (eav *EAV) eavMtime(in []byte) (float64, error) {
 	if version != 0 {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
 	}
-	mtime := binary.BigEndian.Uint64(in[3:])
-	return microToFloat(mtime), nil
+	return microToFloat(binary.BigEndian.Uint64(in[3:])), nil
 }
 
+// The targets must be sorted
 func (eav *EAV) eavHas(in []byte, targets ...uint32) (int, error) {
 	version := in[0]
 	if version != 0 {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
 	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i] < targets[j] })
 	c := binary.BigEndian.Uint16(in[1:])
 	pos := uint32(19)
 	targetIdx := 0
@@ -156,6 +167,7 @@ func (eav *EAV) eavGet(in []byte, target uint32) (interface{}, error) {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
 	}
 	c := binary.BigEndian.Uint16(in[1:])
+	headerLen := uint32(19 + c*9)
 	pos := uint32(19)
 	found := false
 	for i := uint16(0); i != c; i++ {
@@ -175,7 +187,6 @@ func (eav *EAV) eavGet(in []byte, target uint32) (interface{}, error) {
 	if !found {
 		return nil, nil
 	}
-	headerLen := uint32(19 + c*9)
 	valuePos := binary.BigEndian.Uint32(in[pos+4:])
 	valueLen := binary.BigEndian.Uint32(in[headerLen+valuePos:])
 	value := in[headerLen+valuePos+12 : headerLen+valuePos+12+valueLen]
@@ -224,7 +235,7 @@ func (eav *EAV) eavSet(in []byte, packed ...[]byte) ([]byte, error) {
 		pos := i*9 + 19
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
 		valuePos := binary.BigEndian.Uint32(in[pos+4:])
-		flags := in[8]
+		flags := in[pos+8]
 		if namePos != len(nameIndexes) {
 			if nameIndexes[namePos] == nameIdx {
 				currentLen := binary.BigEndian.Uint32(in[currentHeaderLen+valuePos:])

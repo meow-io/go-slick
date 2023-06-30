@@ -109,9 +109,9 @@ func (m *migrator) performMigration(insertVersion string, migration *migration.M
 	})
 }
 
-func (m *migrator) run(label string, f runnerFunc) error {
+func (m *migrator) run(label string, f RunnerFunc) error {
 	if m.lock {
 		return m.db.Run(label, f)
 	}
-	return m.db.runTx(label, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: false}, f)
+	return m.db.RunTx(label, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: false}, f)
 }

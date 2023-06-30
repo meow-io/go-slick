@@ -68,7 +68,7 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 		{
 			Name: "Create initial tables",
 			Func: func(tx *sql.Tx) error {
-				if err := slick.EAVCreateTable("_dg_memberships", &eav.TableDefinition{
+				if err := slick.EAVCreateView("_dg_memberships", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"origin_group_id": {
 							SourceName: "memberships_origin_group_id",
@@ -100,7 +100,7 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 					return err
 				}
 
-				if err := slick.EAVCreateTable("_dg_proposals", &eav.TableDefinition{
+				if err := slick.EAVCreateView("_dg_proposals", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"applier_identity_id": {
 							SourceName: "proposals_applier_identity_id",
@@ -138,7 +138,7 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 					return err
 				}
 
-				return slick.EAVCreateTable("_dg_devices", &eav.TableDefinition{
+				return slick.EAVCreateView("_dg_devices", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"name": {
 							SourceName: "devices_name",
@@ -202,7 +202,6 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 		if len(memberships) != 0 && bytes.Equal(membershipDescBytes, memberships[0].Membership) {
 			return nil
 		}
-
 		writer := slick.EAVWriter(g)
 		writer.Update("_dg_memberships", id[:], map[string]interface{}{
 			"origin_group_id":      groupID[:],
@@ -213,7 +212,7 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 		return writer.execute()
 	}
 
-	slick.beforeApplyViewEAV("_dg_proposals", func(groupID, entityID ids.ID) error {
+	if err := slick.EAVSubscribeBeforeEntity(func(_ string, groupID, entityID ids.ID) error {
 		if groupID != deviceGroupID {
 			return nil
 		}
@@ -240,13 +239,14 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 			ids.IDFromBytes(p.ProposedMembershipID),
 			mem,
 		)
-	})
+	}, true, "_dg_proposals"); err != nil {
+		return nil, err
+	}
 
-	slick.beforeApplyViewEAV("_dg_memberships", func(groupID, entityID ids.ID) error {
+	if err := slick.EAVSubscribeBeforeEntity(func(_ string, groupID, entityID ids.ID) error {
 		if groupID != deviceGroupID {
 			return nil
 		}
-
 		m := &membership{}
 		if err := slick.getEAV(m, "select * from _dg_memberships WHERE id = ? AND group_id = ?", entityID[:], groupID[:]); err != nil {
 			return err
@@ -256,11 +256,9 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 			log.Warnf("error deserializing membership %#v", err)
 			return nil
 		}
-
 		if err := slick.addMembership(ids.IDFromBytes(m.OriginGroupID), ids.IDFromBytes(m.OriginIdentityID), ids.IDFromBytes(m.OriginMembershipID), mem); err != nil {
 			return err
 		}
-
 		existingMemberships := make([]*membership, 0)
 		if err := slick.selectEAV(&existingMemberships, "select * from _dg_memberships WHERE group_id = ? AND origin_identity_id = ? AND _identity_tag = ? AND _membership_tag = ?", g.ID[:], m.OriginIdentityID, g.IdentityTag[:], g.MembershipTag[:]); err != nil {
 			return err
@@ -268,11 +266,9 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 		if len(existingMemberships) != 0 {
 			return nil
 		}
-
 		if bytes.Equal(m.IdentityID, g.IdentityTag[:]) && bytes.Equal(m.MembershipID, g.MembershipTag[:]) {
 			return nil
 		}
-
 		proposals := make([]*proposal, 0)
 		if err := slick.selectEAV(
 			&proposals,
@@ -285,26 +281,21 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 		); err != nil {
 			return err
 		}
-
 		if len(proposals) != 0 {
 			return nil
 		}
-
 		id, err := slick.NewID(g.AuthorTag)
 		if err != nil {
 			return err
 		}
-
 		proposedMembershipID, proposedMembership, err := slick.proposeMembership(ids.IDFromBytes(m.OriginGroupID), ids.IDFromBytes(m.OriginIdentityID), ids.IDFromBytes(m.OriginMembershipID), mem)
 		if err != nil {
 			return err
 		}
-
 		proposedMembershipBytes, err := bencode.Serialize(proposedMembership)
 		if err != nil {
 			return err
 		}
-
 		writer := slick.EAVWriter(g)
 		writer.Update("_dg_proposals", id[:], map[string]interface{}{
 			"applier_identity_id":    m.OriginIdentityID,
@@ -314,7 +305,9 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 			"proposed_membership":    proposedMembershipBytes,
 		})
 		return writer.execute()
-	})
+	}, true, "_dg_memberships"); err != nil {
+		return nil, err
+	}
 
 	return &deviceGroup{log, slick, g, updater, g.ID}, nil
 }

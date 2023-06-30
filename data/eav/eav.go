@@ -2,7 +2,6 @@ package eav
 
 import (
 	"database/sql"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -15,6 +14,8 @@ import (
 	db "github.com/meow-io/go-slick/internal/db"
 	"github.com/meow-io/go-slick/migration"
 	"go.uber.org/zap"
+	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slices"
 )
 
 const (
@@ -30,23 +31,14 @@ const (
 	Other   uint8 = 2
 )
 
-type TableUpdate struct {
-	GroupID ids.ID
-	Name    string
-}
+type BeforeEntityCallback func(viewName string, groupID, id ids.ID) error
+type BeforeViewCallback func(viewName string) error
+type AfterEntityCallback func(viewName string, groupID, id ids.ID)
+type AfterViewCallback func(viewName string)
 
-type TableRowUpdate struct {
-	GroupID ids.ID
-	ID      ids.ID
-	Name    string
-	Vals    map[string]interface{}
-}
-
-type TableRowInsert struct {
-	GroupID ids.ID
-	ID      ids.ID
-	Name    string
-	Vals    map[string]interface{}
+type callback[T any] struct {
+	includeBackfill bool
+	cb              T
 }
 
 type ColumnDefinition struct {
@@ -57,12 +49,7 @@ type ColumnDefinition struct {
 	Nullable     bool
 }
 
-type Indexer interface {
-	Start() error
-	Index(groupID, id ids.ID, tablename string, values map[string]interface{}) error
-}
-
-type TableDefinition struct {
+type ViewDefinition struct {
 	Columns map[string]*ColumnDefinition
 	Indexes [][]string
 }
@@ -73,16 +60,8 @@ type Value struct {
 }
 
 type backfill struct {
-	Names []string                                 `bencode:"n"`
-	Data  map[[16]byte]map[uint64]map[int][][]byte `bencode:"d"`
-}
-
-func microToFloat(ts uint64) float64 {
-	return float64(ts) / 1000000
-}
-
-func extractUnixMicro(id []byte) float64 {
-	return microToFloat(binary.BigEndian.Uint64(id[0:8]))
+	Names []string                                    `bencode:"n"`
+	Data  map[[16]byte]map[uint64]map[uint32][][]byte `bencode:"d"`
 }
 
 func NewValue(src interface{}) Value {
@@ -191,90 +170,13 @@ func (v Value) NativeType(c *ColumnDefinition) interface{} {
 	}
 }
 
-type Operations struct {
-	Names        []string                               `bencode:"n"`
-	OperationMap map[uint64]map[ids.ID]map[uint32]Value `bencode:"m"`
-
-	fromBackfill bool
-	nameMap      map[string]uint32
-}
-
-func NewOperations() *Operations {
-	return &Operations{
-		Names:        make([]string, 0),
-		OperationMap: make(map[uint64]map[ids.ID]map[uint32]Value),
-		nameMap:      make(map[string]uint32),
-	}
-}
-
-func (o *Operations) Empty() bool {
-	return len(o.OperationMap) == 0
-}
-
-func (o *Operations) AddNil(id ids.ID, ts uint64, name string) *Operations {
-	return o.Add(id, ts, name, Value{false, nil})
-}
-
-func (o *Operations) AddBytes(id ids.ID, ts uint64, name string, val []byte) *Operations {
-	return o.Add(id, ts, name, Value{true, val})
-}
-
-func (o *Operations) AddString(id ids.ID, ts uint64, name string, val string) *Operations {
-	return o.Add(id, ts, name, Value{true, []byte(val)})
-}
-
-func (o *Operations) AddInt64(id ids.ID, ts uint64, name string, val int64) *Operations {
-	return o.Add(id, ts, name, Value{true, []byte(strconv.FormatInt(val, 10))})
-}
-
-func (o *Operations) AddFloat64(id ids.ID, ts uint64, name string, val float64) *Operations {
-	return o.Add(id, ts, name, Value{true, []byte(strconv.FormatFloat(val, 'f', -1, 64))})
-}
-
-func (o *Operations) Add(id ids.ID, ts uint64, name string, val Value) *Operations {
-	if _, ok := o.OperationMap[ts]; !ok {
-		o.OperationMap[ts] = make(map[ids.ID]map[uint32]Value)
-	}
-	if _, ok := o.OperationMap[ts][id]; !ok {
-		o.OperationMap[ts][id] = make(map[uint32]Value)
-	}
-	if _, ok := o.nameMap[name]; !ok {
-		nameIdx := len(o.Names)
-		o.nameMap[name] = uint32(nameIdx)
-		o.Names = append(o.Names, name)
-	}
-	o.OperationMap[ts][id][o.nameMap[name]] = val
-	return o
-}
-
-func (o *Operations) AddMap(ts uint64, ops map[ids.ID]map[string]Value) *Operations {
-	for id, idMap := range ops {
-		for name, val := range idMap {
-			o.Add(id, ts, name, val)
-		}
-	}
-	return o
-}
-
-func DeserializeOps(b []byte) (*Operations, error) {
-	o := &Operations{}
-	if err := bencode.Deserialize(b, o); err != nil {
-		return nil, err
-	}
-	return o, nil
-}
-
-func SerializeOps(ops *Operations) ([]byte, error) {
-	return bencode.Serialize(ops)
-}
-
 type Result struct {
 	Names []string
 	Rows  [][]interface{}
 }
 
 type eavColumn struct {
-	TableName    string  `db:"table_name"`
+	ViewName     string  `db:"view_name"`
 	TargetName   string  `db:"target_name"`
 	SourceName   string  `db:"source_name"`
 	ColumnType   uint8   `db:"column_type"`
@@ -284,7 +186,7 @@ type eavColumn struct {
 }
 
 type eavIndex struct {
-	TableName string `db:"table_name"`
+	ViewName  string `db:"view_name"`
 	IndexJSON string `db:"index_json"`
 }
 
@@ -300,14 +202,19 @@ type eavData struct {
 }
 
 type EAV struct {
-	log            *zap.SugaredLogger
-	config         *config.Config
-	db             *db.Database
-	clock          clock.Clock
-	definitions    map[string]*TableDefinition
-	nameMap        map[string]uint32
-	sourceTableMap map[string][]string
-	updates        chan interface{}
+	log                     *zap.SugaredLogger
+	config                  *config.Config
+	db                      *db.Database
+	clock                   clock.Clock
+	definitions             map[string]*ViewDefinition
+	nameMap                 map[string]uint32
+	updates                 chan interface{}
+	beforeEntitySubscribers map[string][]callback[BeforeEntityCallback]
+	beforeViewSubscribers   map[string][]callback[BeforeViewCallback]
+	afterEntitySubscribers  map[string][]callback[AfterEntityCallback]
+	afterViewSubscribers    map[string][]callback[AfterViewCallback]
+	entitiesAffected        map[string]map[ids.ID]map[ids.ID]bool
+	viewNameTesters         map[string]string
 }
 
 func NewEAV(c *config.Config, d *db.Database, clock clock.Clock, updates chan interface{}) (*EAV, error) {
@@ -319,20 +226,20 @@ func NewEAV(c *config.Config, d *db.Database, clock clock.Clock, updates chan in
 			Func: func(tx *sql.Tx) error {
 				_, err := tx.Exec(`
 CREATE TABLE IF NOT EXISTS _eav_columns (
-	table_name STRING NOT NULL,
+	view_name STRING NOT NULL,
 	target_name STRING NOT NULL,
 	source_name STRING NOT NULL,
 	column_type INTEGER NOT NULL,
 	default_value BLOB,
 	required INTEGER NOT NULL,
 	nullable INTEGER NOT NULL,
-	PRIMARY KEY(table_name, target_name)
+	PRIMARY KEY(view_name, target_name)
 );
 
 CREATE TABLE IF NOT EXISTS _eav_indexes (
-	table_name STRING NOT NULL,
+	view_name STRING NOT NULL,
 	index_json STRING NOT NULL,
-	PRIMARY KEY(table_name, index_json)
+	PRIMARY KEY(view_name, index_json)
 );
 
 CREATE TABLE IF NOT EXISTS _eav_names (
@@ -359,13 +266,19 @@ CREATE TABLE IF NOT EXISTS _eav_data (
 	}
 
 	eav := &EAV{
-		log:         log,
-		config:      c,
-		db:          d,
-		clock:       clock,
-		definitions: make(map[string]*TableDefinition),
-		nameMap:     make(map[string]uint32),
-		updates:     updates,
+		log:                     log,
+		config:                  c,
+		db:                      d,
+		clock:                   clock,
+		definitions:             make(map[string]*ViewDefinition),
+		nameMap:                 make(map[string]uint32),
+		updates:                 updates,
+		beforeEntitySubscribers: make(map[string][]callback[BeforeEntityCallback]),
+		beforeViewSubscribers:   make(map[string][]callback[BeforeViewCallback]),
+		afterEntitySubscribers:  make(map[string][]callback[AfterEntityCallback]),
+		afterViewSubscribers:    make(map[string][]callback[AfterViewCallback]),
+		entitiesAffected:        make(map[string]map[ids.ID]map[ids.ID]bool),
+		viewNameTesters:         make(map[string]string),
 	}
 
 	def, err := eav.loadDefinitions()
@@ -373,24 +286,82 @@ CREATE TABLE IF NOT EXISTS _eav_data (
 		return nil, err
 	}
 	eav.definitions = def
-
-	eav.buildSourceNameTableMap()
 	return eav, nil
 }
 
-func (eav *EAV) Schema(tablename string) (*TableDefinition, bool) {
-	d, ok := eav.definitions[tablename]
+func (eav *EAV) SubscribeAfterEntity(cb AfterEntityCallback, includeBackfill bool, views ...string) error {
+	for _, v := range views {
+		if _, ok := eav.afterEntitySubscribers[v]; !ok {
+			eav.afterEntitySubscribers[v] = make([]callback[AfterEntityCallback], 0, 1)
+		}
+		eav.afterEntitySubscribers[v] = append(eav.afterEntitySubscribers[v], callback[AfterEntityCallback]{includeBackfill, cb})
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		if err != nil {
+			return err
+		}
+		eav.viewNameTesters[v] = fmt.Sprintf("WHEN %s THEN '%s'", viewWhereClause, v)
+	}
+	return nil
+}
+
+func (eav *EAV) SubscribeAfterView(cb AfterViewCallback, includeBackfill bool, views ...string) error {
+	for _, v := range views {
+		if _, ok := eav.afterViewSubscribers[v]; !ok {
+			eav.afterViewSubscribers[v] = make([]callback[AfterViewCallback], 0, 1)
+		}
+		eav.afterViewSubscribers[v] = append(eav.afterViewSubscribers[v], callback[AfterViewCallback]{includeBackfill, cb})
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		if err != nil {
+			return err
+		}
+		eav.viewNameTesters[v] = fmt.Sprintf("WHEN %s THEN '%s'", viewWhereClause, v)
+	}
+	return nil
+}
+
+func (eav *EAV) SubscribeBeforeEntity(cb BeforeEntityCallback, includeBackfill bool, views ...string) error {
+	for _, v := range views {
+		if _, ok := eav.beforeEntitySubscribers[v]; !ok {
+			eav.beforeEntitySubscribers[v] = make([]callback[BeforeEntityCallback], 0, 1)
+		}
+		eav.beforeEntitySubscribers[v] = append(eav.beforeEntitySubscribers[v], callback[BeforeEntityCallback]{includeBackfill, cb})
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		if err != nil {
+			return err
+		}
+		eav.viewNameTesters[v] = fmt.Sprintf("WHEN %s THEN '%s'", viewWhereClause, v)
+	}
+	return nil
+}
+
+func (eav *EAV) SubscribeBeforeView(cb BeforeViewCallback, includeBackfill bool, views ...string) error {
+	for _, v := range views {
+		if _, ok := eav.beforeViewSubscribers[v]; !ok {
+			eav.beforeViewSubscribers[v] = make([]callback[BeforeViewCallback], 0, 1)
+		}
+		eav.beforeViewSubscribers[v] = append(eav.beforeViewSubscribers[v], callback[BeforeViewCallback]{includeBackfill, cb})
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		if err != nil {
+			return err
+		}
+		eav.viewNameTesters[v] = fmt.Sprintf("WHEN %s THEN '%s'", viewWhereClause, v)
+	}
+	return nil
+}
+
+func (eav *EAV) Schema(viewName string) (*ViewDefinition, bool) {
+	d, ok := eav.definitions[viewName]
 	return d, ok
 }
 
-func (eav *EAV) CreateView(tableName string, schema *TableDefinition) error {
+func (eav *EAV) CreateView(viewName string, schema *ViewDefinition) error {
 	// drop existing view
-	eav.log.Debugf("rebuilding view for %s", tableName)
-	if _, err := eav.db.Tx.Exec(fmt.Sprintf("DROP VIEW IF EXISTS %s", tableName)); err != nil {
+	eav.log.Debugf("rebuilding view for %s", viewName)
+	if _, err := eav.db.Tx.Exec(fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName)); err != nil {
 		return err
 	}
 
-	indexPrefix := fmt.Sprintf("_idx_eav_%s__", tableName)
+	indexPrefix := fmt.Sprintf("_idx_eav_%s__", viewName)
 
 	// drop existing indexes related to view
 	var indexes []string
@@ -410,16 +381,18 @@ func (eav *EAV) CreateView(tableName string, schema *TableDefinition) error {
 	}
 
 	// create the "primary key" view index
-	eav.db.Tx.Exec(fmt.Sprintf("create index %s on (group_id, id) WHERE %s", indexPrefix+"_pk", viewWhereClause))
+	if _, err := eav.db.Tx.Exec(fmt.Sprintf("create index %s on _eav_data (group_id, id) WHERE %s", indexPrefix+"_pk", viewWhereClause)); err != nil {
+		return err
+	}
 
 	// create any secondary indexes
 	for _, index := range schema.Indexes {
-		eav.log.Debugf("creating index %s on %s", indexPrefix+strings.Join(index, "_"), tableName)
+		eav.log.Debugf("creating index %s on %s", indexPrefix+strings.Join(index, "_"), viewName)
 		indexValues, err := eav.buildIndexValues(index)
 		if err != nil {
 			return err
 		}
-		statement := fmt.Sprintf("CREATE INDEX %s%s_%s_idx on _eav_data (%s) WHERE %s", indexPrefix, tableName, strings.Join(index, "_"), indexValues, viewWhereClause)
+		statement := fmt.Sprintf("CREATE INDEX %s%s_%s_idx on _eav_data (%s) WHERE %s", indexPrefix, viewName, strings.Join(index, "_"), indexValues, viewWhereClause)
 		if _, err := eav.db.Tx.Exec(statement); err != nil {
 			return err
 		}
@@ -435,20 +408,17 @@ func (eav *EAV) CreateView(tableName string, schema *TableDefinition) error {
 		group_id, id, _identity_tag, _membership_tag, _ctime, _mtime, _wtime, %s)
 		AS SELECT group_id, id, identity_tag, membership_tag, eav_ctime(id), eav_mtime(value), eav_wtime(value), %s from _eav_data
 	  WHERE %s`,
-		tableName,
+		viewName,
 		strings.Join(columnNames, ","),
 		strings.Join(columnDefinitions, ","),
 		viewWhereClause,
 	)
+
 	if _, err := eav.db.Tx.Exec(createViewStatement); err != nil {
 		return err
 	}
 
-	if err := eav.saveDefintion(tableName, schema); err != nil {
-		return err
-	}
-
-	return nil
+	return eav.saveDefintion(viewName, schema)
 }
 
 func (eav *EAV) buildColumnDefinitions(columns map[string]*ColumnDefinition) ([]string, []string, error) {
@@ -471,23 +441,34 @@ func (eav *EAV) buildColumnDefinitions(columns map[string]*ColumnDefinition) ([]
 		if err != nil {
 			return nil, nil, err
 		}
-		defs = append(defs, fmt.Sprintf("CAST(eav_get(value, %d) AS %s)", id, t))
+		if def.DefaultValue.Present {
+			defaultValue := fmt.Sprintf("x'%x'", def.DefaultValue.Bytes)
+			defs = append(defs, fmt.Sprintf("CAST(COALESCE(eav_get(value, %d), %s) AS %s)", id, defaultValue, t))
+		} else {
+			defs = append(defs, fmt.Sprintf("CAST(eav_get(value, %d) AS %s)", id, t))
+		}
+
 		names = append(names, name)
 	}
 	return names, defs, nil
 }
 
 func (eav *EAV) buildViewWhereClause(columns map[string]*ColumnDefinition) (string, error) {
-	where := make([]string, 0, len(columns))
+	nameIDs := make([]uint32, 0, len(columns))
 	for _, def := range columns {
 		if !def.Required {
 			continue
 		}
-		nameId, err := eav.idForName(def.SourceName)
+		nameID, err := eav.idForName(def.SourceName)
 		if err != nil {
 			return "", err
 		}
-		where = append(where, fmt.Sprintf("%d", nameId))
+		nameIDs = append(nameIDs, nameID)
+	}
+	slices.Sort(nameIDs)
+	where := make([]string, len(nameIDs))
+	for i, nameID := range nameIDs {
+		where[i] = fmt.Sprintf("%d", nameID)
 	}
 	return fmt.Sprintf("eav_has(value, %s)", strings.Join(where, ", ")), nil
 }
@@ -521,39 +502,151 @@ func (eav *EAV) buildIndexValues(indexColumns []string) (string, error) {
 }
 
 func (eav *EAV) Apply(groupID ids.ID, applier uint8, ops *Operations) (*Operations, *Operations, error) {
+	return eav.apply(groupID, applier, ops, false)
+}
+
+func (eav *EAV) apply(groupID ids.ID, applier uint8, ops *Operations, backfilling bool) (*Operations, *Operations, error) {
 	groupOperations := NewOperations()
 	selfOperations := NewOperations()
-	// updatedTables := make(map[string]bool)
+	entities := []ids.ID{}
 	for ts, idMap := range ops.OperationMap {
 		for id, pairs := range idMap {
+			entities = append(entities, id)
+			packed := [][]byte{}
 			for nameID, value := range pairs {
 				name := ops.Names[nameID]
 				if !eav.checkNameAccess(applier, name) {
 					continue
 				}
+				extractedType := eav.extractNamePermission(name)
+				switch extractedType {
+				case Private:
+					// do nothing
+				case Self:
+					selfOperations.Add(id, ts, name, value)
+				case Other:
+					groupOperations.Add(id, ts, name, value)
+				}
 
-				applied, err := eav.apply(groupID, id, ts, name, value)
+				nameID, err := eav.idForName(name)
 				if err != nil {
 					return nil, nil, err
 				}
-				if applied {
-					extractedType := eav.extractNamePermission(name)
-					switch extractedType {
-					case Private:
-						// do nothing
-					case Self:
-						selfOperations.Add(id, ts, name, value)
-					case Other:
-						groupOperations.Add(id, ts, name, value)
-					}
+				packed = append(packed, db.EAVPack(nameID, ts, !value.Present, value.Bytes))
+			}
+
+			if len(packed) == 0 {
+				continue
+			}
+			packedHex := make([]string, len(packed))
+			for i, p := range packed {
+				packedHex[i] = fmt.Sprintf("x'%x'", p)
+			}
+
+			// do this in two parts to avoid generating useless empty records and calling eav_set too much
+			result, err := eav.db.Tx.Exec(
+				fmt.Sprintf(`UPDATE _eav_data SET value = eav_set(value, %s) WHERE group_id = ? AND id = ?`, strings.Join(packedHex, ",")),
+				groupID[:], id[:])
+			if err != nil {
+				return nil, nil, fmt.Errorf("error during update: %w", err)
+			}
+			i, err := result.RowsAffected()
+			if err != nil {
+				return nil, nil, err
+			}
+			if i == 0 {
+				newRec, err := eav.db.EAVHandler.MakeRecord(packed...)
+				if err != nil {
+					return nil, nil, err
+				}
+				result, err = eav.db.Tx.Exec(
+					fmt.Sprintf(`INSERT INTO _eav_data (group_id, id, value) VALUES (?, ?, x'%x')`, newRec),
+					groupID[:], id[:])
+				if err != nil {
+					return nil, nil, err
+				}
+				i, err = result.RowsAffected()
+				if err != nil {
+					return nil, nil, err
+				}
+				if i != 1 {
+					panic("should have affected a row")
 				}
 			}
 		}
 	}
 
-	// for t := range updatedTables {
-	// 	eav.updates <- &TableUpdate{groupID, t}
-	// }
+	if len(eav.viewNameTesters) != 0 {
+		entitiesAffected := make(map[ids.ID]bool)
+		viewsAffected := make(map[string]bool)
+		for idIndex := range entities {
+			id := entities[idIndex]
+			if entitiesAffected[id] {
+				continue
+			}
+
+			viewName := ""
+			if err := eav.db.Tx.Get(&viewName, fmt.Sprintf(`select (case
+				%s
+				ELSE ''
+			end) from _eav_data where group_id = ? and id = ?`, strings.Join(maps.Values(eav.viewNameTesters), "\n")), groupID[:], id[:]); err != nil {
+				return nil, nil, err
+			}
+			if viewName == "" {
+				continue
+			}
+			entitiesAffected[id] = true
+			viewsAffected[viewName] = true
+			if len(eav.beforeEntitySubscribers[viewName]) != 0 {
+				for i := range eav.beforeEntitySubscribers[viewName] {
+					cb := eav.beforeEntitySubscribers[viewName][i]
+					if backfilling && !cb.includeBackfill {
+						continue
+					}
+					eav.db.BeforeCommit(func() error {
+						return cb.cb(viewName, groupID, id)
+					})
+				}
+			}
+			if len(eav.afterEntitySubscribers[viewName]) != 0 {
+				for i := range eav.afterEntitySubscribers[viewName] {
+					cb := eav.afterEntitySubscribers[viewName][i]
+					if backfilling && !cb.includeBackfill {
+						continue
+					}
+					eav.db.AfterCommit(func() {
+						cb.cb(viewName, groupID, id)
+					})
+				}
+			}
+		}
+
+		for viewName := range viewsAffected {
+			if len(eav.beforeViewSubscribers[viewName]) != 0 {
+				for i := range eav.beforeViewSubscribers[viewName] {
+					cb := eav.beforeViewSubscribers[viewName][i]
+					if backfilling && !cb.includeBackfill {
+						continue
+					}
+					eav.db.BeforeCommit(func() error {
+						return cb.cb(viewName)
+					})
+				}
+			}
+
+			if len(eav.afterViewSubscribers[viewName]) != 0 {
+				for i := range eav.afterViewSubscribers[viewName] {
+					cb := eav.afterViewSubscribers[viewName][i]
+					if backfilling && !cb.includeBackfill {
+						continue
+					}
+					eav.db.AfterCommit(func() {
+						cb.cb(viewName)
+					})
+				}
+			}
+		}
+	}
 
 	return groupOperations, selfOperations, nil
 }
@@ -613,9 +706,9 @@ func (eav *EAV) Query(statement string, args ...interface{}) (*Result, error) {
 }
 
 func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, partial, fromSelf bool) ([]byte, [16]byte, bool, error) {
-	nextID := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	nextID := startFrom
 	values := []interface{}{groupID[:], startFrom[:]}
-	statement := "SELECT id, name, value, ts from _eav_data where group_id = ? AND ID >= ?"
+	statement := "SELECT id, value from _eav_data where group_id = ? AND ID >= ?"
 	if partial {
 		statement += " AND identity_tag = ? AND membership_tag = ?"
 		values = append(values, authorTag[0:4], authorTag[4:])
@@ -627,19 +720,21 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 	if err != nil {
 		return nil, nextID, false, err
 	}
+	defer valueRows.Close()
 	applier := Other
 	if fromSelf {
 		applier = Private
 	}
-	defer valueRows.Close()
-	names := make(map[uint32]int)
+	names := make(map[uint32]uint32)
 	backfillNames := make([]string, 0)
-	data := map[[16]byte]map[uint64]map[int][][]byte{}
+	data := map[[16]byte]map[uint64]map[uint32][][]byte{}
 	i := 0
 	// need to also encode the names
 	var v eavData
 	for valueRows.Next() {
 		i++
+		copy(nextID[:], v.ID)
+
 		if err := valueRows.StructScan(&v); err != nil {
 			return nil, nextID, false, err
 		}
@@ -658,10 +753,16 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 			}
 
 			if _, ok := names[nameIdx]; !ok {
-				names[nameIdx] = len(backfillNames)
+				names[nameIdx] = uint32(len(backfillNames))
 				backfillNames = append(backfillNames, nameStr)
 			}
 
+			if _, ok := data[ids.IDFromBytes(v.ID)]; !ok {
+				data[ids.IDFromBytes(v.ID)] = make(map[uint64]map[uint32][][]byte)
+			}
+			if _, ok := data[ids.IDFromBytes(v.ID)][val.Time]; !ok {
+				data[ids.IDFromBytes(v.ID)][val.Time] = make(map[uint32][][]byte)
+			}
 			data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]] = [][]byte{}
 			if val.Flag&db.DeletedFlag == 0 {
 				data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]] = append(data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]], val.Val)
@@ -676,7 +777,7 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 	if err != nil {
 		return nil, nextID, false, err
 	}
-	return backfillBytes, [16]byte(v.ID), i != 1000, nil
+	return backfillBytes, nextID, i != 1000, nil
 }
 
 func (eav *EAV) ProcessBackfill(groupID ids.ID, applier uint8, body []byte) error {
@@ -700,12 +801,12 @@ func (eav *EAV) ProcessBackfill(groupID ids.ID, applier uint8, body []byte) erro
 				case 1:
 					ops.AddBytes(id, ts, name, values[0])
 				default:
-					return fmt.Errorf("expected v to be 28 bytes long, got %d", len(v))
+					return fmt.Errorf("expected values to be 0 or 1 long, is %d", len(values))
 				}
 			}
 		}
 	}
-	if _, _, err := eav.Apply(groupID, applier, ops); err != nil {
+	if _, _, err := eav.apply(groupID, applier, ops, true); err != nil {
 		return err
 	}
 	return nil
@@ -737,8 +838,8 @@ func (eav *EAV) nameForID(id uint32) (string, error) {
 	return name.Name, nil
 }
 
-func (eav *EAV) loadDefinitions() (map[string]*TableDefinition, error) {
-	def := make(map[string]*TableDefinition)
+func (eav *EAV) loadDefinitions() (map[string]*ViewDefinition, error) {
+	def := make(map[string]*ViewDefinition)
 	var columns []*eavColumn
 	if err := eav.db.Conn.Select(&columns, "SELECT * FROM _eav_columns"); err != nil {
 		return def, fmt.Errorf("messaging: error counting keys: %w", err)
@@ -750,8 +851,8 @@ func (eav *EAV) loadDefinitions() (map[string]*TableDefinition, error) {
 	}
 
 	for _, column := range columns {
-		if _, ok := def[column.TableName]; !ok {
-			def[column.TableName] = &TableDefinition{
+		if _, ok := def[column.ViewName]; !ok {
+			def[column.ViewName] = &ViewDefinition{
 				Columns: make(map[string]*ColumnDefinition),
 				Indexes: make([][]string, 0),
 			}
@@ -763,7 +864,7 @@ func (eav *EAV) loadDefinitions() (map[string]*TableDefinition, error) {
 		} else {
 			defaultValue = Value{false, nil}
 		}
-		def[column.TableName].Columns[column.TargetName] = &ColumnDefinition{
+		def[column.ViewName].Columns[column.TargetName] = &ColumnDefinition{
 			SourceName:   column.SourceName,
 			ColumnType:   column.ColumnType,
 			DefaultValue: defaultValue,
@@ -777,22 +878,22 @@ func (eav *EAV) loadDefinitions() (map[string]*TableDefinition, error) {
 		if err := json.Unmarshal([]byte(index.IndexJSON), &loadedIndexes); err != nil {
 			return def, err
 		}
-		def[index.TableName].Indexes = append(def[index.TableName].Indexes, loadedIndexes)
+		def[index.ViewName].Indexes = append(def[index.ViewName].Indexes, loadedIndexes)
 	}
 	return def, nil
 }
 
-func (eav *EAV) saveDefintion(tableName string, newDefinition *TableDefinition) error {
-	if _, err := eav.db.Tx.Exec("DELETE FROM _eav_columns WHERE table_name = ?", tableName); err != nil {
+func (eav *EAV) saveDefintion(viewName string, newDefinition *ViewDefinition) error {
+	if _, err := eav.db.Tx.Exec("DELETE FROM _eav_columns WHERE view_name = ?", viewName); err != nil {
 		return err
 	}
-	if _, err := eav.db.Tx.Exec("DELETE FROM _eav_indexes WHERE table_name = ?", tableName); err != nil {
+	if _, err := eav.db.Tx.Exec("DELETE FROM _eav_indexes WHERE view_name = ?", viewName); err != nil {
 		return err
 	}
 
 	for targetName, columnDef := range newDefinition.Columns {
 		col := eavColumn{
-			TableName:    tableName,
+			ViewName:     viewName,
 			TargetName:   targetName,
 			SourceName:   columnDef.SourceName,
 			ColumnType:   columnDef.ColumnType,
@@ -801,7 +902,7 @@ func (eav *EAV) saveDefintion(tableName string, newDefinition *TableDefinition) 
 			Nullable:     columnDef.Nullable,
 		}
 
-		if _, err := eav.db.Tx.NamedExec("INSERT INTO _eav_columns (table_name, target_name, source_name, column_type, default_value, required, nullable) VALUES (:table_name, :target_name, :source_name, :column_type, :default_value, :required, :nullable)", col); err != nil {
+		if _, err := eav.db.Tx.NamedExec("INSERT INTO _eav_columns (view_name, target_name, source_name, column_type, default_value, required, nullable) VALUES (:view_name, :target_name, :source_name, :column_type, :default_value, :required, :nullable)", col); err != nil {
 			return fmt.Errorf("messaging: error inserting column: %w", err)
 		}
 	}
@@ -812,59 +913,16 @@ func (eav *EAV) saveDefintion(tableName string, newDefinition *TableDefinition) 
 			return err
 		}
 		idx := eavIndex{
-			TableName: tableName,
+			ViewName:  viewName,
 			IndexJSON: string(indexJSON),
 		}
 
-		if _, err := eav.db.Tx.NamedExec("INSERT INTO _eav_indexes (table_name, index_json) VALUES (:table_name, :index_json)", idx); err != nil {
+		if _, err := eav.db.Tx.NamedExec("INSERT INTO _eav_indexes (view_name, index_json) VALUES (:view_name, :index_json)", idx); err != nil {
 			return fmt.Errorf("messaging: error inserting index: %w", err)
 		}
 	}
-	eav.definitions[tableName] = newDefinition
-	eav.buildSourceNameTableMap()
+	eav.definitions[viewName] = newDefinition
 	return nil
-}
-
-func (eav *EAV) apply(groupID, id ids.ID, ts uint64, name string, val Value) (bool, error) {
-	applied := false
-	nameID, err := eav.idForName(name)
-	if err != nil {
-		return applied, err
-	}
-
-	// namePermission := eav.extractNamePermission(name)
-	eavDB := db.EAV{eav.clock}
-
-	packed := db.EAVPack(nameID, ts, !val.Present, val.Bytes)
-	newRec, err := eavDB.MakeRecord(packed)
-	if err != nil {
-		return false, err
-	}
-	// namePermission, val.BytePointer(), ts
-	result, err := eav.db.Tx.Exec(
-		`INSERT INTO _eav_data (group_id, id, value) VALUES (?, ?, ?)
-		ON CONFLICT(group_id, id) DO UPDATE SET value = eav_set(value, ?)`,
-		groupID[:], id[:], newRec, packed)
-	if err != nil {
-		return applied, err
-	}
-	i, err := result.RowsAffected()
-	if err != nil {
-		return applied, err
-	}
-	return i != 0, nil
-}
-
-func (eav *EAV) buildSourceNameTableMap() {
-	eav.sourceTableMap = make(map[string][]string)
-	for tableName, def := range eav.definitions {
-		for _, col := range def.Columns {
-			if _, ok := eav.sourceTableMap[col.SourceName]; !ok {
-				eav.sourceTableMap[col.SourceName] = make([]string, 0)
-			}
-			eav.sourceTableMap[col.SourceName] = append(eav.sourceTableMap[col.SourceName], tableName)
-		}
-	}
 }
 
 func (eav *EAV) checkNameAccess(applier uint8, name string) bool {

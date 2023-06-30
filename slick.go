@@ -137,9 +137,8 @@ func NewPin() (string, error) {
 }
 
 type Slick struct {
-	DeviceGroup *deviceGroup
-	DB          *db.Database
-
+	DeviceGroup        *deviceGroup
+	DB                 *db.Database
 	lastTimestamp      uint64
 	timeVersion        uint8
 	config             *config.Config
@@ -387,8 +386,8 @@ INSERT INTO _time_id_gen (id, time_version) values(1, 0);
 	if err != nil {
 		return err
 	}
-	s.DeviceGroup = deviceGroup
 
+	s.DeviceGroup = deviceGroup
 	s.setState(StateRunning)
 	s.startUpdatePassing(ctx)
 	return nil
@@ -584,21 +583,17 @@ func (s *Slick) GroupState(groupID ids.ID) (*GroupUpdate, error) {
 }
 
 // Creates a single table in the EAV database.
-func (s *Slick) EAVCreateTable(tablename string, def *eav.TableDefinition) error {
-	return s.data.EAV.CreateTable(tablename, def)
+func (s *Slick) EAVCreateView(viewname string, def *eav.ViewDefinition) error {
+	return s.data.EAV.CreateView(viewname, def)
 }
 
-func (s *Slick) EAVCreateTables(tables map[string]*eav.TableDefinition) error {
-	for tablename, def := range tables {
-		if err := s.data.EAV.CreateTable(tablename, def); err != nil {
+func (s *Slick) EAVCreateViews(views map[string]*eav.ViewDefinition) error {
+	for viewname, def := range views {
+		if err := s.data.EAV.CreateView(viewname, def); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (s *Slick) EAVTableAddColumns(tablename string, cols map[string]*eav.ColumnDefinition) error {
-	return s.data.EAV.AlterTableAddColumns(tablename, cols)
 }
 
 // Write to the EAV database.
@@ -668,6 +663,34 @@ func (s *Slick) eavWrite(id ids.ID, ops *eav.Operations) error {
 	return nil
 }
 
+// Register callback for entities changes before they are committed
+func (s *Slick) EAVSubscribeBeforeEntity(cb func(viewName string, groupID, id ids.ID) error, includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe before entity", func() error {
+		return s.data.EAV.SubscribeBeforeEntity(cb, includeBackfill, views...)
+	})
+}
+
+// Register callback for entities changes after they are committed
+func (s *Slick) EAVSubscribeAfterEntity(cb func(viewName string, groupID, id ids.ID), includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe after entity", func() error {
+		return s.data.EAV.SubscribeAfterEntity(cb, includeBackfill, views...)
+	})
+}
+
+// Register callback for view changes before they are committed
+func (s *Slick) EAVSubscribeBeforeView(cb func(viewName string) error, includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe before view", func() error {
+		return s.data.EAV.SubscribeBeforeView(cb, includeBackfill, views...)
+	})
+}
+
+// Register callback for view changes after they are committed
+func (s *Slick) EAVSubscribeAfterView(cb func(viewName string), includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe after view", func() error {
+		return s.data.EAV.SubscribeAfterView(cb, includeBackfill, views...)
+	})
+}
+
 // Query the EAV database with a SQL statement.
 func (s *Slick) EAVQuery(query string, vars ...interface{}) (*eav.Result, error) {
 	var res *eav.Result
@@ -700,7 +723,8 @@ func (s *Slick) EAVGet(dest interface{}, query string, vars ...interface{}) erro
 }
 
 func (s *Slick) getEAV(dest interface{}, query string, vars ...interface{}) error {
-	return s.data.EAV.Get(dest, query, vars...)
+	err := s.data.EAV.Get(dest, query, vars...)
+	return err
 }
 
 func (s *Slick) startUpdatePassing(ctx context.Context) {
@@ -799,10 +823,6 @@ func (s *Slick) loadTimeVersion() error {
 		}
 		return nil
 	})
-}
-
-func (s *Slick) beforeApplyViewEAV(table string, cb func(groupID, entityID ids.ID) error) {
-	s.data.EAV.BeforeApplyView(table, cb)
 }
 
 func (s *Slick) membershipUpdater() messaging.MembershipUpdater {

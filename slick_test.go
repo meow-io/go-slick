@@ -113,7 +113,7 @@ func TestTwoPartySlick(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return s1.EAVCreateTable("messages", &eav.TableDefinition{
+				return s1.EAVCreateView("messages", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"body": {
 							SourceName:   "body",
@@ -174,7 +174,7 @@ func TestTwoPartySlick(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return s2.EAVCreateTable("messages", &eav.TableDefinition{
+				return s2.EAVCreateView("messages", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"body": {
 							SourceName:   "body",
@@ -253,9 +253,9 @@ func TestLargeBackfill(t *testing.T) {
 
 	for i := 0; i != 9; i++ {
 		ops := eav.NewOperations()
-		id, err := s1.NewID(s1groups[0].AuthorTag)
-		require.Nil(err)
 		for j := 0; j != 1001; j++ {
+			id, err := s1.NewID(s1groups[0].AuthorTag)
+			require.Nil(err)
 			ops.AddString(id, ts, fmt.Sprintf("attr-%d", j), "hi there")
 		}
 		require.Nil(s1.EAVWrite(s1groups[0].ID, ops))
@@ -308,7 +308,7 @@ func TestDeviceGroupJoining(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return s1.EAVCreateTable("messages", &eav.TableDefinition{
+				return s1.EAVCreateView("messages", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"body": {
 							SourceName:   "body",
@@ -425,7 +425,7 @@ func TestDeviceGroupJoining(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return r2.EAVCreateTable("messages", &eav.TableDefinition{
+				return r2.EAVCreateView("messages", &eav.ViewDefinition{
 					Columns: map[string]*eav.ColumnDefinition{
 						"body": {
 							SourceName:   "body",
