@@ -153,10 +153,11 @@ type Slick struct {
 	finished           sync.WaitGroup
 	transportStates    map[string]string
 	transportStateLock sync.Mutex
+	applicationInit    func() error
 }
 
 // Create a slick instance
-func NewSlick(c *config.Config) (*Slick, error) {
+func NewSlick(c *config.Config, applicationInit func() error) (*Slick, error) {
 	log := c.Logger("")
 	absRootPath, err := filepath.Abs(c.RootDir)
 	if err != nil {
@@ -193,6 +194,7 @@ func NewSlick(c *config.Config) (*Slick, error) {
 		updates:         make(chan interface{}, 100),
 		DB:              db,
 		transportStates: make(map[string]string),
+		applicationInit: applicationInit,
 	}
 
 	return slick, nil
@@ -366,6 +368,10 @@ INSERT INTO _time_id_gen (id, time_version) values(1, 0);
 		s.messaging = messaging
 		return nil
 	}); err != nil {
+		return err
+	}
+
+	if err := s.applicationInit(); err != nil {
 		return err
 	}
 
