@@ -764,7 +764,7 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 				data[ids.IDFromBytes(v.ID)][val.Time] = make(map[uint32][][]byte)
 			}
 			data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]] = [][]byte{}
-			if val.Flag&db.DeletedFlag == 0 {
+			if val.Flag&db.NullFlag == 0 {
 				data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]] = append(data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]], val.Val)
 			}
 		}

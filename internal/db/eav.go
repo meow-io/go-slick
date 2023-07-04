@@ -8,7 +8,7 @@ import (
 	"github.com/meow-io/go-slick/clock"
 )
 
-const DeletedFlag = 1
+const NullFlag = 1
 
 type EAVValue struct {
 	Time uint64
@@ -23,7 +23,7 @@ func EAVPack(nameIdx uint32, ts uint64, null bool, val []byte) []byte {
 	ret = binary.BigEndian.AppendUint32(ret, nameIdx)
 	ret = binary.BigEndian.AppendUint64(ret, ts)
 	if null {
-		ret = append(ret, uint8(DeletedFlag))
+		ret = append(ret, uint8(NullFlag))
 	} else {
 		ret = append(ret, uint8(0))
 	}
@@ -48,7 +48,7 @@ func EAVExtractNameValues(in []byte) (map[uint32]*EAVValue, error) {
 			Flag: in[pos+8],
 			Val:  nil,
 		}
-		if v.Flag&DeletedFlag == 0 {
+		if v.Flag&NullFlag == 0 {
 			valueLen := binary.BigEndian.Uint32(in[headerLen+valuePos:])
 			v.Val = in[headerLen+valuePos+12 : headerLen+valuePos+12+valueLen]
 		}
@@ -144,14 +144,18 @@ func (eav *EAV) eavHas(in []byte, targets ...uint32) (int, error) {
 			break
 		}
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
-		pos += 9
 		if nameIdx == targets[targetIdx] {
+			if in[pos+8]&NullFlag != 0 {
+				return 0, nil
+			}
 			targetIdx++
+			pos += 9
 			continue
 		}
 		if nameIdx > targets[targetIdx] {
 			return 0, nil
 		}
+		pos += 9
 	}
 	if targetIdx != len(targets) {
 		return 0, nil
@@ -173,7 +177,7 @@ func (eav *EAV) eavGet(in []byte, target uint32) (interface{}, error) {
 	for i := uint16(0); i != c; i++ {
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
 		if nameIdx == target {
-			if in[pos+8]&DeletedFlag != 0 {
+			if in[pos+8]&NullFlag != 0 {
 				return nil, nil
 			}
 			found = true

@@ -183,6 +183,36 @@ func TestGetNullValue(t *testing.T) {
 }
 
 func TestHasValue(t *testing.T) {
+	require := require.New(t)
+	in := []byte{
+		0x0,      // version
+		0x0, 0x2, // count
+		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, // mtime
+		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, // wtime
+		0x0, 0x0, 0x0, 0x0, // name index
+		0x0, 0x0, 0x0, 0x0, // pos
+		0x0,                // flag
+		0x0, 0x0, 0x0, 0x1, // name index
+		0x0, 0x0, 0x0, 0x11, // pos
+		0x0,                // flag
+		0x0, 0x0, 0x0, 0x5, // len
+		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, // time
+		'h', 'e', 'l', 'l', 'o',
+		0x0, 0x0, 0x0, 0x6, // len
+		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // time
+		't', 'h', 'e', 'r', 'e', '!',
+	}
+	e := EAV{&testClock{}, nil}
+	c, err := e.eavHas(in, 0, 1)
+	require.Nil(err)
+	require.Equal(1, c)
+	c, err = e.eavHas(in, 0, 1, 2)
+	require.Nil(err)
+	require.Equal(0, c)
+}
+
+func TestHasValueWithNull(t *testing.T) {
+	require := require.New(t)
 	in := []byte{
 		0x0,      // version
 		0x0, 0x2, // count
@@ -193,7 +223,7 @@ func TestHasValue(t *testing.T) {
 		0x1,                // flag
 		0x0, 0x0, 0x0, 0x1, // name index
 		0x0, 0x0, 0x0, 0x11, // pos
-		0x1,                // flag
+		0x0,                // flag
 		0x0, 0x0, 0x0, 0x5, // len
 		0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, // time
 		'h', 'e', 'l', 'l', 'o',
@@ -202,19 +232,10 @@ func TestHasValue(t *testing.T) {
 		't', 'h', 'e', 'r', 'e', '!',
 	}
 	e := EAV{&testClock{}, nil}
-	c, err := e.eavHas(in, 0, 1)
-	if err != nil {
-		t.Fatalf("error %#v", err)
-	}
-	if c != 1 {
-		t.Fatalf("expected a match")
-	}
-
-	c, err = e.eavHas(in, 0, 1, 2)
-	if err != nil {
-		t.Fatalf("error %#v", err)
-	}
-	if c != 0 {
-		t.Fatalf("expected not a match")
-	}
+	c, err := e.eavHas(in, 1)
+	require.Nil(err)
+	require.Equal(1, c)
+	c, err = e.eavHas(in, 0, 1)
+	require.Nil(err)
+	require.Equal(0, c)
 }
