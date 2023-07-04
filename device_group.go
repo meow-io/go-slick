@@ -68,92 +68,88 @@ func newDeviceGroup(slick *Slick) (*deviceGroup, error) {
 		{
 			Name: "Create initial tables",
 			Func: func(tx *sql.Tx) error {
-				if err := slick.EAVCreateView("_dg_memberships", &eav.ViewDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"origin_group_id": {
-							SourceName: "memberships_origin_group_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
+				return slick.EAVCreateViews(map[string]*eav.ViewDefinition{
+					"_dg_memberships": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"origin_group_id": {
+								SourceName: "memberships_origin_group_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"origin_identity_id": {
+								SourceName: "memberships_origin_identity_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"origin_membership_id": {
+								SourceName: "memberships_origin_membership_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"membership": {
+								SourceName: "memberships_membership",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
 						},
-						"origin_identity_id": {
-							SourceName: "memberships_origin_identity_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
-						"origin_membership_id": {
-							SourceName: "memberships_origin_membership_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
-						"membership": {
-							SourceName: "memberships_membership",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
+						Indexes: [][]string{},
 					},
-					Indexes: [][]string{},
-				}); err != nil {
-					return err
-				}
-
-				if err := slick.EAVCreateView("_dg_proposals", &eav.ViewDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"applier_identity_id": {
-							SourceName: "proposals_applier_identity_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
+					"_dg_proposals": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"applier_identity_id": {
+								SourceName: "proposals_applier_identity_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"applier_membership_id": {
+								SourceName: "proposals_applier_membership_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"applier_group_id": {
+								SourceName: "proposals_applier_group_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"proposed_membership_id": {
+								SourceName: "proposals_proposed_membership_id",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
+							"proposed_membership": {
+								SourceName: "proposals_proposed_membership",
+								ColumnType: eav.Blob,
+								Required:   true,
+								Nullable:   false,
+							},
 						},
-						"applier_membership_id": {
-							SourceName: "proposals_applier_membership_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
-						"applier_group_id": {
-							SourceName: "proposals_applier_group_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
-						"proposed_membership_id": {
-							SourceName: "proposals_proposed_membership_id",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
-						"proposed_membership": {
-							SourceName: "proposals_proposed_membership",
-							ColumnType: eav.Blob,
-							Required:   true,
-							Nullable:   false,
-						},
+						Indexes: [][]string{},
 					},
-					Indexes: [][]string{},
-				}); err != nil {
-					return err
-				}
-
-				return slick.EAVCreateView("_dg_devices", &eav.ViewDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"name": {
-							SourceName: "devices_name",
-							ColumnType: eav.Text,
-							Required:   true,
-							Nullable:   false,
+					"_dg_devices": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"name": {
+								SourceName: "devices_name",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
+							},
+							"type": {
+								SourceName: "devices_type",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
+							},
 						},
-						"type": {
-							SourceName: "devices_type",
-							ColumnType: eav.Text,
-							Required:   true,
-							Nullable:   false,
-						},
+						Indexes: [][]string{},
 					},
-					Indexes: [][]string{},
 				})
 			},
 		},

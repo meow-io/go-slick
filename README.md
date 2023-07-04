@@ -2,13 +2,13 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/meow-io/go-slick.svg)](https://pkg.go.dev/github.com/meow-io/go-slick)
 
-Slick is an implementation of the [Slick protocol](https://github.com/meow-io/slick) written in Go. An example app uses this framework can be found in the [Roost repo](https://github.com/meow-io/roost).
-
 Everything here is subject to change, and it's still in active development. If you'd like to contribute please join us on [Discord](https://discord.gg/brCQsDfZbH).
 
 ## Overview
 
 Slick is a library for building offline-first, e2e encrypted applications for mobile or desktop. It does this by letting you share SQLite databases with all your devices and friends. It uses last-write-win to resolve conflicts, and allows changes to the schema without losing data between users.
+
+An example app uses this framework can be found in the [Roost repo](https://github.com/meow-io/roost).
 
 ## Installation
 
@@ -28,7 +28,9 @@ For a more detailed example, see [roost's mobile build scripts](https://github.c
 
 ## Usage
 
-### Create a Slick instance
+### Create a Slick instance & define your schema
+
+First, creating an instance and define a schema for your data. This is much like a regular SQLite table, with a few extra columns. For instance, a table named `messages` can be created using
 
 ```go
 import (
@@ -65,14 +67,14 @@ _ := s.DB.Migrate("app", []*migration.Migration{
               Required:   true,
               Nullable:   false,
             },
+            Indexes: [][]string{{"_ctime"}, {"group_id"}},
           },
-          Indexes: [][]string{{"_ctime"}, {"group_id"}},
-        },
-      }); err != nil {
-        return err
-      }
+        }); err != nil {
+          return err
+        }
+      },
     },
-  },
+  })
 })
 ```
 
@@ -159,6 +161,8 @@ All devices will automatically be joined to every group within your device netwo
 
 ## Achitecture
 
+Slick is an implementation of the [Slick protocol](https://github.com/meow-io/slick) written in Go.
+
 ### Slick
 
 ![Overview](overview.png)
@@ -177,7 +181,7 @@ This layer passes data down to EAV layer and passes errors back up to slick.
 
 #### EAV
 
-The EAV layer takes the existing EAV writes and offers a sql-like interface on top of that data. It does this by pivoting data into "horizontal" schema tables. As such it is storing the data twice, once in the EAV structure and once in the horizontal structure. Incremental schema updates are currently planned but as yet unsupported.
+The EAV layer takes the existing EAV writes and offers a sql-like interface on top of that data. It does this by pivoting data into "horizontal" views. This is accomplished by using SQLite partial indexes to create views of the data.
 
 While SQL reads are supported, writing is performed through the EAV write mechanism. As such, transactions or using queries within writes is not permitted.
 

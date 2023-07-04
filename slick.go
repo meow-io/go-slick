@@ -588,11 +588,7 @@ func (s *Slick) GroupState(groupID ids.ID) (*GroupUpdate, error) {
 	return update, err
 }
 
-// Creates a single table in the EAV database.
-func (s *Slick) EAVCreateView(viewname string, def *eav.ViewDefinition) error {
-	return s.data.EAV.CreateView(viewname, def)
-}
-
+// Creates multiple views in the EAV database.
 func (s *Slick) EAVCreateViews(views map[string]*eav.ViewDefinition) error {
 	for viewname, def := range views {
 		if err := s.data.EAV.CreateView(viewname, def); err != nil {
