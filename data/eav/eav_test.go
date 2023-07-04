@@ -687,6 +687,94 @@ func TestBeforeInsertEntitySubscriber(t *testing.T) {
 	<-done
 }
 
+func TestBeforeUpdateEntitySubscriber(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	done := make(chan bool, 1)
+	entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+	require.Nil(eav.db.Run("testing", func() error {
+		require.Nil(eav.CreateView("messages", &ViewDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+				"emoji": {
+					SourceName: "message_emoji",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+			},
+			Indexes: make([][]string, 0),
+		}))
+
+		eav.SubscribeBeforeEntity(func(viewName string, groupID, id ids.ID) error {
+			done <- true
+			return nil
+		}, true, "messages")
+
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there").
+			AddString(entityID, 0, "message_emoji", "🤣"))
+		require.Nil(err)
+
+		return nil
+	}))
+	<-done
+	require.Nil(eav.db.Run("testing", func() error {
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 1, "message_body", "hi there again").
+			AddString(entityID, 1, "message_emoji", "📍"))
+		return err
+	}))
+	<-done
+}
+
+func TestAfterInsertEntitySubscriber(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	done := make(chan bool, 1)
+	require.Nil(eav.db.Run("testing", func() error {
+		require.Nil(eav.CreateView("messages", &ViewDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+				"emoji": {
+					SourceName: "message_emoji",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+			},
+			Indexes: make([][]string, 0),
+		}))
+
+		eav.SubscribeAfterEntity(func(viewName string, groupID, id ids.ID) {
+			done <- true
+		}, true, "messages")
+
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there").
+			AddString(entityID, 0, "message_emoji", "🤣"))
+		require.Nil(err)
+
+		return nil
+	}))
+	<-done
+}
+
 func TestBeforeInsertEntitySubscriberWithError(t *testing.T) {
 	require := require.New(t)
 	eav := newEAV()
@@ -755,9 +843,11 @@ func TestBeforeInsertViewSubscriber(t *testing.T) {
 			return nil
 		}, true, "messages")
 
-		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		entityID1 := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		entityID2 := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
 		_, _, err := eav.Apply(groupID, Self, NewOperations().
-			AddString(entityID, 0, "message_body", "hi there"))
+			AddString(entityID1, 0, "message_body", "hi there").
+			AddString(entityID2, 0, "message_body", "hi there"))
 		require.Nil(err)
 
 		return nil
