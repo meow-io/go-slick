@@ -148,7 +148,7 @@ type Slick struct {
 	messaging          *messaging.Manager
 	transport          *transport.Manager
 	data               *data.Manager
-	updates            chan interface{}
+	updates            []chan interface{}
 	cancelFunc         context.CancelFunc
 	finished           sync.WaitGroup
 	transportStates    map[string]string
@@ -191,7 +191,7 @@ func NewSlick(c *config.Config, applicationInit func() error) (*Slick, error) {
 		messaging:       nil,
 		transport:       nil,
 		data:            nil,
-		updates:         make(chan interface{}, 100),
+		updates:         make([]chan interface{}, 0),
 		DB:              db,
 		transportStates: make(map[string]string),
 		applicationInit: applicationInit,
@@ -230,8 +230,10 @@ func (s *Slick) NewID(authorTag [7]byte) (ids.ID, error) {
 
 // Gets various updates which must be dealt with.
 // This will either produce *GroupUpdate, *eav.TableRowUpdate, *eav.TableRowInsert or *eav.TableUpdate
-func (s *Slick) Updates() chan interface{} {
-	return s.updates
+func (s *Slick) Updates() <-chan interface{} {
+	c := make(chan interface{}, 100)
+	s.updates = append(s.updates, c)
+	return c
 }
 
 // Returns true is slick is in NEW state.
@@ -283,7 +285,7 @@ func (s *Slick) GetMessages(key []byte) error {
 		case <-done:
 		case <-time.After(10 * time.Second):
 		}
-		s.updates <- &MessagesFetchedUpdate{}
+		s.update(&MessagesFetchedUpdate{})
 	}()
 
 	// open
@@ -465,9 +467,10 @@ func (s *Slick) Shutdown() error {
 
 	s.setState(StateInitialized)
 
-	close(s.updates)
-	s.updates = make(chan interface{}, 100)
-
+	for _, c := range s.updates {
+		close(c)
+	}
+	s.updates = make([]chan interface{}, 0)
 	return nil
 }
 
@@ -739,7 +742,7 @@ func (s *Slick) startUpdatePassing(ctx context.Context) {
 				return
 			case e := <-s.data.Updates():
 				s.log.Debugf("passing update: data %#v", e)
-				s.updates <- e
+				s.update(e)
 			case e := <-s.transport.Updates():
 				switch v := e.(type) {
 				case *heya.StateUpdate:
@@ -749,13 +752,13 @@ func (s *Slick) startUpdatePassing(ctx context.Context) {
 					s.transportStateLock.Unlock()
 					tsu := &TransportStateUpdate{URL: url, State: v.State}
 					s.log.Debugf("passing update: transport state %#v", tsu)
-					s.updates <- tsu
+					s.update(e)
 				}
 			case e := <-s.messaging.Updates():
 				switch v := e.(type) {
 				case *messaging.GroupUpdate:
 					s.log.Debugf("passing update: group update %#v", v)
-					s.updates <- &GroupUpdate{
+					s.update(&GroupUpdate{
 						ID:                   v.GroupID,
 						AckedMemberCount:     v.AckedMemberCount,
 						GroupState:           v.GroupState,
@@ -763,27 +766,27 @@ func (s *Slick) startUpdatePassing(ctx context.Context) {
 						ConnectedMemberCount: v.ConnectedMemberCount,
 						Seq:                  v.Seq,
 						PendingMessageCount:  v.PendingMessageCount,
-					}
+					})
 				case *messaging.IntroFailed:
 					s.log.Debugf("passing update: intro failed %#v", v)
-					s.updates <- &GroupUpdate{
+					s.update(&GroupUpdate{
 						ID:         v.GroupID,
 						GroupState: IntroFailed,
-					}
+					})
 				case *messaging.IntroSucceeded:
 					s.log.Debugf("passing update: intro succeeded %#v", v)
-					s.updates <- &GroupUpdate{
+					s.update(&GroupUpdate{
 						ID:         v.GroupID,
 						GroupState: IntroSucceeded,
-					}
+					})
 				case *messaging.IntroUpdate:
 					s.log.Debugf("passing update: intro update %#v", v)
-					s.updates <- &IntroUpdate{
+					s.update(&IntroUpdate{
 						GroupID:   v.GroupID,
 						Stage:     v.Stage,
 						Initiator: v.Initiator,
 						Type:      v.Type,
-					}
+					})
 				default:
 					s.log.Infof("Unpassed event %#v", e)
 				}
@@ -808,7 +811,7 @@ func (s *Slick) Transports() *Transports {
 
 func (s *Slick) setState(state int) {
 	s.state = state
-	s.updates <- &AppState{state}
+	s.update(&AppState{state})
 }
 
 func (s *Slick) loadTimeVersion() error {
@@ -825,6 +828,17 @@ func (s *Slick) loadTimeVersion() error {
 		}
 		return nil
 	})
+}
+
+func (s *Slick) update(e interface{}) {
+	for _, c := range s.updates {
+		select {
+		case c <- e:
+			// do nothing
+		default:
+			s.log.Warnf("update not sent, channel full: %#v", e)
+		}
+	}
 }
 
 func (s *Slick) membershipUpdater() messaging.MembershipUpdater {
