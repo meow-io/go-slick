@@ -44,9 +44,9 @@ type callback[T any] struct {
 type ColumnDefinition struct {
 	SourceName   string
 	ColumnType   uint8
-	DefaultValue Value
-	Required     bool
-	Nullable     bool
+	DefaultValue *Value // optional default value
+	Required     bool   // the value must exist within the eav record
+	Nullable     bool   // the value is allowed to be null
 }
 
 type ViewDefinition struct {
@@ -55,7 +55,7 @@ type ViewDefinition struct {
 }
 
 type Value struct {
-	Present bool   `bencode:"p"`
+	NotNull bool   `bencode:"n"`
 	Bytes   []byte `bencode:"b"`
 }
 
@@ -64,7 +64,7 @@ type backfill struct {
 	Data  map[[16]byte]map[uint64]map[uint32][][]byte `bencode:"d"`
 }
 
-func NewValue(src interface{}) Value {
+func NewValue(src interface{}) *Value {
 	v, err := NewValueWithError(src)
 	if err != nil {
 		panic(err)
@@ -72,44 +72,44 @@ func NewValue(src interface{}) Value {
 	return v
 }
 
-func NewBytesValue(v []byte) Value {
-	return Value{true, v}
+func NewBytesValue(v []byte) *Value {
+	return &Value{true, v}
 }
 
-func NewFloat64Value(v float64) Value {
-	return Value{true, []byte(strconv.FormatFloat(v, 'f', -1, 64))}
+func NewFloat64Value(v float64) *Value {
+	return &Value{true, []byte(strconv.FormatFloat(v, 'f', -1, 64))}
 }
 
-func NewInt64Value(v int64) Value {
-	return Value{true, []byte(strconv.FormatInt(v, 10))}
+func NewInt64Value(v int64) *Value {
+	return &Value{true, []byte(strconv.FormatInt(v, 10))}
 }
 
-func NewIntValue(v int) Value {
+func NewIntValue(v int) *Value {
 	return NewInt64Value(int64(v))
 }
 
-func NewUint64Value(v uint64) Value {
-	return Value{true, []byte(strconv.FormatUint(v, 10))}
+func NewUint64Value(v uint64) *Value {
+	return &Value{true, []byte(strconv.FormatUint(v, 10))}
 }
 
-func NewUintValue(v uint) Value {
+func NewUintValue(v uint) *Value {
 	return NewUint64Value(uint64(v))
 }
 
-func NewStringValue(v string) Value {
-	return Value{true, []byte(v)}
+func NewStringValue(v string) *Value {
+	return &Value{true, []byte(v)}
 }
 
-func NewBoolValue(v bool) Value {
+func NewBoolValue(v bool) *Value {
 	if v {
-		return Value{true, []byte("1")}
+		return &Value{true, []byte("1")}
 	}
-	return Value{true, []byte("0")}
+	return &Value{true, []byte("0")}
 }
 
-func NewValueWithError(src interface{}) (Value, error) {
+func NewValueWithError(src interface{}) (*Value, error) {
 	if src == nil {
-		return Value{false, nil}, nil
+		return &Value{false, nil}, nil
 	}
 	switch t := src.(type) {
 	case float64:
@@ -131,42 +131,7 @@ func NewValueWithError(src interface{}) (Value, error) {
 	case bool:
 		return NewBoolValue(t), nil
 	default:
-		return Value{}, fmt.Errorf("unrecognized type %T", src)
-	}
-}
-
-func (v Value) BytePointer() *[]byte {
-	if !v.Present {
-		return nil
-	}
-	b := v.Bytes
-	return &b
-}
-
-func (v Value) NativeType(c *ColumnDefinition) interface{} {
-	if !v.Present {
-		return nil
-	}
-
-	switch c.ColumnType {
-	case Blob:
-		return v.Bytes
-	case Text:
-		return string(v.Bytes)
-	case Real:
-		f, err := strconv.ParseFloat(string(v.Bytes), 64)
-		if err != nil {
-			return c.DefaultValue.NativeType(c)
-		}
-		return f
-	case Int:
-		i, err := strconv.ParseInt(string(v.Bytes), 10, 64)
-		if err != nil {
-			return c.DefaultValue.NativeType(c)
-		}
-		return i
-	default:
-		panic("unrecognized type")
+		return nil, fmt.Errorf("unrecognized type %T", src)
 	}
 }
 
@@ -435,17 +400,38 @@ func (eav *EAV) buildColumnDefinitions(columns map[string]*ColumnDefinition) ([]
 			t = " TEXT"
 		case Real:
 			t = " REAL"
+		default:
+			return names, defs, fmt.Errorf("unexpected column type %d", def.ColumnType)
 		}
 
 		id, err := eav.idForName(def.SourceName)
 		if err != nil {
 			return nil, nil, err
 		}
-		if def.DefaultValue.Present {
-			defaultValue := fmt.Sprintf("x'%x'", def.DefaultValue.Bytes)
-			defs = append(defs, fmt.Sprintf("CAST(COALESCE(eav_get(value, %d), %s) AS %s)", id, defaultValue, t))
-		} else {
+		if def.Required {
+			if def.DefaultValue != nil {
+				return names, defs, fmt.Errorf("column %s type cannot be required and have a default value", name)
+			}
 			defs = append(defs, fmt.Sprintf("CAST(eav_get(value, %d) AS %s)", id, t))
+		} else {
+			if def.Nullable {
+				defaultValueExpr := "NULL"
+				if def.DefaultValue != nil && def.DefaultValue.NotNull {
+					defaultValueExpr = fmt.Sprintf("x'%x'", def.DefaultValue.Bytes)
+				}
+				defs = append(defs, fmt.Sprintf(`
+				CASE eav_has(value, 1, %d)
+				WHEN 1 THEN CAST(eav_get(value, %d) AS %s)
+				ELSE %s
+				END
+				`, id, id, t, defaultValueExpr))
+			} else {
+				if def.DefaultValue == nil || !def.DefaultValue.NotNull {
+					return names, defs, fmt.Errorf("column %s type cannot be optional and not have a default value", name)
+				}
+				defaultValueExpr := fmt.Sprintf("x'%x'", def.DefaultValue.Bytes)
+				defs = append(defs, fmt.Sprintf("CAST(COALESCE(eav_get(value, %d), %s) AS %s)", id, defaultValueExpr, t))
+			}
 		}
 
 		names = append(names, name)
@@ -454,7 +440,8 @@ func (eav *EAV) buildColumnDefinitions(columns map[string]*ColumnDefinition) ([]
 }
 
 func (eav *EAV) buildViewWhereClause(columns map[string]*ColumnDefinition) (string, error) {
-	nameIDs := make([]uint32, 0, len(columns))
+	nullableNameIDs := make([]uint32, 0, len(columns))
+	nonnullableNameIDs := make([]uint32, 0, len(columns))
 	for _, def := range columns {
 		if !def.Required {
 			continue
@@ -463,14 +450,34 @@ func (eav *EAV) buildViewWhereClause(columns map[string]*ColumnDefinition) (stri
 		if err != nil {
 			return "", err
 		}
-		nameIDs = append(nameIDs, nameID)
+		if def.Nullable {
+			nullableNameIDs = append(nullableNameIDs, nameID)
+		} else {
+			nonnullableNameIDs = append(nonnullableNameIDs, nameID)
+		}
 	}
-	slices.Sort(nameIDs)
-	where := make([]string, len(nameIDs))
-	for i, nameID := range nameIDs {
-		where[i] = fmt.Sprintf("%d", nameID)
+	slices.Sort(nullableNameIDs)
+	slices.Sort(nonnullableNameIDs)
+	parts := make([]string, 0, 2)
+	if len(nullableNameIDs) == 0 && len(nonnullableNameIDs) == 0 {
+		return "", fmt.Errorf("expected some required columns, got none")
 	}
-	return fmt.Sprintf("eav_has(value, %s)", strings.Join(where, ", ")), nil
+	if len(nullableNameIDs) != 0 {
+		where := make([]string, len(nullableNameIDs))
+		for i, nameID := range nullableNameIDs {
+			where[i] = fmt.Sprintf("%d", nameID)
+		}
+		parts = append(parts, fmt.Sprintf("eav_has(value, 1, %s)", strings.Join(where, ", ")))
+	}
+	if len(nonnullableNameIDs) != 0 {
+		where := make([]string, len(nonnullableNameIDs))
+		for i, nameID := range nonnullableNameIDs {
+			where[i] = fmt.Sprintf("%d", nameID)
+		}
+		parts = append(parts, fmt.Sprintf("eav_has(value, 0, %s)", strings.Join(where, ", ")))
+	}
+
+	return strings.Join(parts, "AND"), nil
 }
 
 func (eav *EAV) buildIndexValues(indexColumns []string) (string, error) {
@@ -532,7 +539,7 @@ func (eav *EAV) apply(groupID ids.ID, applier uint8, ops *Operations, backfillin
 				if err != nil {
 					return nil, nil, err
 				}
-				packed = append(packed, db.EAVPack(nameID, ts, !value.Present, value.Bytes))
+				packed = append(packed, db.EAVPack(nameID, ts, !value.NotNull, value.Bytes))
 			}
 
 			if len(packed) == 0 {
@@ -858,11 +865,12 @@ func (eav *EAV) loadDefinitions() (map[string]*ViewDefinition, error) {
 			}
 		}
 
-		var defaultValue Value
+		var defaultValue *Value
 		if column.DefaultValue != nil {
-			defaultValue = NewValue(column.DefaultValue)
+			v := NewValue(column.DefaultValue)
+			defaultValue = v
 		} else {
-			defaultValue = Value{false, nil}
+			defaultValue = &Value{false, nil}
 		}
 		def[column.ViewName].Columns[column.TargetName] = &ColumnDefinition{
 			SourceName:   column.SourceName,
@@ -893,13 +901,12 @@ func (eav *EAV) saveDefintion(viewName string, newDefinition *ViewDefinition) er
 
 	for targetName, columnDef := range newDefinition.Columns {
 		col := eavColumn{
-			ViewName:     viewName,
-			TargetName:   targetName,
-			SourceName:   columnDef.SourceName,
-			ColumnType:   columnDef.ColumnType,
-			DefaultValue: columnDef.DefaultValue.BytePointer(),
-			Required:     columnDef.Required,
-			Nullable:     columnDef.Nullable,
+			ViewName:   viewName,
+			TargetName: targetName,
+			SourceName: columnDef.SourceName,
+			ColumnType: columnDef.ColumnType,
+			Required:   columnDef.Required,
+			Nullable:   columnDef.Nullable,
 		}
 
 		if _, err := eav.db.Tx.NamedExec("INSERT INTO _eav_columns (view_name, target_name, source_name, column_type, default_value, required, nullable) VALUES (:view_name, :target_name, :source_name, :column_type, :default_value, :required, :nullable)", col); err != nil {

@@ -117,18 +117,16 @@ func TestTwoPartySlick(t *testing.T) {
 					"messages": &eav.ViewDefinition{
 						Columns: map[string]*eav.ColumnDefinition{
 							"body": {
-								SourceName:   "body",
-								ColumnType:   eav.Text,
-								DefaultValue: eav.NewBytesValue([]byte("something")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
 							},
 							"published_at": {
-								SourceName:   "published_at",
-								ColumnType:   eav.Int,
-								DefaultValue: eav.NewBytesValue([]byte("0")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
 							},
 							"read": {
 								SourceName:   "_self_read",
@@ -180,18 +178,16 @@ func TestTwoPartySlick(t *testing.T) {
 					"messages": &eav.ViewDefinition{
 						Columns: map[string]*eav.ColumnDefinition{
 							"body": {
-								SourceName:   "body",
-								ColumnType:   eav.Text,
-								DefaultValue: eav.NewBytesValue([]byte("something")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
 							},
 							"published_at": {
-								SourceName:   "published_at",
-								ColumnType:   eav.Int,
-								DefaultValue: eav.NewBytesValue([]byte("0")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
 							},
 							"read": {
 								SourceName:   "_self_read",
@@ -315,18 +311,16 @@ func TestDeviceGroupJoining(t *testing.T) {
 					"messages": &eav.ViewDefinition{
 						Columns: map[string]*eav.ColumnDefinition{
 							"body": {
-								SourceName:   "body",
-								ColumnType:   eav.Text,
-								DefaultValue: eav.NewBytesValue([]byte("something")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
 							},
 							"published_at": {
-								SourceName:   "published_at",
-								ColumnType:   eav.Int,
-								DefaultValue: eav.NewBytesValue([]byte("0")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
 							},
 							"read": {
 								SourceName:   "_self_read",
@@ -433,18 +427,16 @@ func TestDeviceGroupJoining(t *testing.T) {
 					"messages": &eav.ViewDefinition{
 						Columns: map[string]*eav.ColumnDefinition{
 							"body": {
-								SourceName:   "body",
-								ColumnType:   eav.Text,
-								DefaultValue: eav.NewBytesValue([]byte("something")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
 							},
 							"published_at": {
-								SourceName:   "published_at",
-								ColumnType:   eav.Int,
-								DefaultValue: eav.NewBytesValue([]byte("0")),
-								Required:     true,
-								Nullable:     false,
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
 							},
 							"read": {
 								SourceName:   "_self_read",

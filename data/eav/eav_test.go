@@ -116,6 +116,57 @@ func TestApplyOperationsBeforeSchema(t *testing.T) {
 	}))
 }
 
+func TestDefaultValueOnRequired(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("testing", func() error {
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there").
+			AddBytes(entityID, 0, "message_blob", []byte{0, 1, 2, 3}).
+			AddInt64(entityID, 0, "message_age", 23).
+			AddFloat64(entityID, 0, "message_height", 23.23))
+		require.Nil(err)
+		require.Nil(eav.CreateView("messages", &ViewDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+				"age": {
+					SourceName: "message_age",
+					ColumnType: Int,
+					Required:   true,
+					Nullable:   false,
+				},
+				"height": {
+					SourceName: "message_height",
+					ColumnType: Real,
+					Required:   true,
+					Nullable:   false,
+				},
+				"blob": {
+					SourceName: "message_blob",
+					ColumnType: Blob,
+					Required:   true,
+					Nullable:   false,
+				},
+			},
+			Indexes: make([][]string, 0),
+		}))
+		require.Nil(err)
+		result, err := eav.Query("select id, body, age, height, blob from messages")
+		require.Nil(err)
+		require.Equal(1, len(result.Rows))
+		require.Equal("hi there", result.Rows[0][1])
+		return nil
+	}))
+}
+
 func TestCreateTableTwice(t *testing.T) {
 	require := require.New(t)
 	eav := newEAV()
@@ -489,8 +540,8 @@ func TestVisibilitySplitting(t *testing.T) {
 		require.Equal(groupOps.OperationMap, map[uint64]map[ids.ID]map[uint32]Value{
 			0: {
 				entityID: {
-					groupOps.nameMap["message_age"]:    NewInt64Value(23),
-					groupOps.nameMap["message_height"]: NewFloat64Value(23.23),
+					groupOps.nameMap["message_age"]:    *NewInt64Value(23),
+					groupOps.nameMap["message_height"]: *NewFloat64Value(23.23),
 				},
 			},
 		})
@@ -498,7 +549,7 @@ func TestVisibilitySplitting(t *testing.T) {
 		require.Equal(selfOps.OperationMap, map[uint64]map[ids.ID]map[uint32]Value{
 			0: {
 				entityID: {
-					selfOps.nameMap["_self_message_blob"]: NewBytesValue([]byte{0, 1, 2, 3}),
+					selfOps.nameMap["_self_message_blob"]: *NewBytesValue([]byte{0, 1, 2, 3}),
 				},
 			},
 		})
@@ -891,6 +942,189 @@ func TestBackfill(t *testing.T) {
 		var count int
 		require.Nil(eav2.db.Tx.Get(&count, "select count(*) from _eav_data"))
 		require.Equal(1000, count)
+		return nil
+	}))
+}
+
+func TestRequiredNullable(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("test schema", func() error {
+		require.Nil(eav.CreateView("messages", &ViewDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   true,
+				},
+			},
+			Indexes: make([][]string, 0),
+		}))
+
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddNil(entityID, 0, "message_body"))
+		require.Nil(err)
+
+		type message struct {
+			ID   []byte  `db:"id"`
+			Body *string `db:"body"`
+		}
+		var messages []*message
+		require.Nil(eav.Select(&messages, "select id, body from messages"))
+		require.Equal(1, len(messages))
+		return nil
+	}))
+}
+
+func TestRequiredWithDefault(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("test schema", func() error {
+		require.ErrorContains(
+			eav.CreateView("messages", &ViewDefinition{
+				Columns: map[string]*ColumnDefinition{
+					"body": {
+						SourceName:   "message_body",
+						ColumnType:   Text,
+						Required:     true,
+						DefaultValue: &Value{true, []byte("hello")},
+					},
+				},
+				Indexes: make([][]string, 0),
+			}),
+			"column body type cannot be required and have a default value")
+		return nil
+	}))
+}
+
+func TestOptionalWithDefault(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("test schema", func() error {
+		require.Nil(
+			eav.CreateView("messages", &ViewDefinition{
+				Columns: map[string]*ColumnDefinition{
+					"body": {
+						SourceName: "message_body",
+						ColumnType: Text,
+						Required:   true,
+					},
+					"reaction": {
+						SourceName:   "message_reaction",
+						ColumnType:   Text,
+						Required:     false,
+						DefaultValue: &Value{true, []byte("hello")},
+					},
+				},
+				Indexes: make([][]string, 0),
+			}))
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there"))
+		require.Nil(err)
+
+		type message struct {
+			ID       []byte `db:"id"`
+			Body     string `db:"body"`
+			Reaction string `db:"reaction"`
+		}
+		var messages []*message
+		require.Nil(eav.Select(&messages, "select id, body, reaction from messages"))
+		require.Equal(1, len(messages))
+		require.Equal("hello", messages[0].Reaction)
+		return nil
+	}))
+}
+
+func TestOptionalWithDefaultWithExplictlyWrittenNull(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("test schema", func() error {
+		require.Nil(
+			eav.CreateView("messages", &ViewDefinition{
+				Columns: map[string]*ColumnDefinition{
+					"body": {
+						SourceName: "message_body",
+						ColumnType: Text,
+						Required:   true,
+					},
+					"reaction": {
+						SourceName:   "message_reaction",
+						ColumnType:   Text,
+						Required:     false,
+						Nullable:     true,
+						DefaultValue: &Value{true, []byte("hello")},
+					},
+				},
+				Indexes: make([][]string, 0),
+			}))
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there").
+			AddNil(entityID, 0, "message_reaction"))
+		require.Nil(err)
+
+		type message struct {
+			ID       []byte  `db:"id"`
+			Body     string  `db:"body"`
+			Reaction *string `db:"reaction"`
+		}
+		var messages []*message
+		require.Nil(eav.Select(&messages, "select id, body, reaction from messages"))
+		require.Equal(1, len(messages))
+		require.Nil(messages[0].Reaction)
+		return nil
+	}))
+}
+
+func TestOptionalWithDefaultWithoutExplictlyWrittenNull(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("test schema", func() error {
+		require.Nil(
+			eav.CreateView("messages", &ViewDefinition{
+				Columns: map[string]*ColumnDefinition{
+					"body": {
+						SourceName: "message_body",
+						ColumnType: Text,
+						Required:   true,
+					},
+					"reaction": {
+						SourceName:   "message_reaction",
+						ColumnType:   Text,
+						Required:     false,
+						Nullable:     true,
+						DefaultValue: &Value{true, []byte("hello")},
+					},
+				},
+				Indexes: make([][]string, 0),
+			}))
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there"))
+		require.Nil(err)
+
+		type message struct {
+			ID       []byte  `db:"id"`
+			Body     string  `db:"body"`
+			Reaction *string `db:"reaction"`
+		}
+		var messages []*message
+		require.Nil(eav.Select(&messages, "select id, body, reaction from messages"))
+		require.Equal(1, len(messages))
+		require.Equal("hello", *messages[0].Reaction)
 		return nil
 	}))
 }

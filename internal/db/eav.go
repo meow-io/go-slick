@@ -131,7 +131,7 @@ func (eav *EAV) eavMtime(in []byte) (float64, error) {
 }
 
 // The targets must be sorted
-func (eav *EAV) eavHas(in []byte, targets ...uint32) (int, error) {
+func (eav *EAV) eavHas(in []byte, includeNull int, targets ...uint32) (int, error) {
 	version := in[0]
 	if version != 0 {
 		return 0, fmt.Errorf("expected version 0, got %d", version)
@@ -145,7 +145,7 @@ func (eav *EAV) eavHas(in []byte, targets ...uint32) (int, error) {
 		}
 		nameIdx := binary.BigEndian.Uint32(in[pos:])
 		if nameIdx == targets[targetIdx] {
-			if in[pos+8]&NullFlag != 0 {
+			if includeNull == 0 && in[pos+8]&NullFlag != 0 {
 				return 0, nil
 			}
 			targetIdx++

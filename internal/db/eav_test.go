@@ -232,10 +232,13 @@ func TestHasValueWithNull(t *testing.T) {
 		't', 'h', 'e', 'r', 'e', '!',
 	}
 	e := EAV{&testClock{}, nil}
-	c, err := e.eavHas(in, 1)
+	c, err := e.eavHas(in, 1, 1)
 	require.Nil(err)
 	require.Equal(1, c)
-	c, err = e.eavHas(in, 0, 1)
+	c, err = e.eavHas(in, 0, 0, 1)
 	require.Nil(err)
 	require.Equal(0, c)
+	c, err = e.eavHas(in, 1, 0, 1)
+	require.Nil(err)
+	require.Equal(1, c)
 }
