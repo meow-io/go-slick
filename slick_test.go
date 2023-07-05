@@ -36,7 +36,7 @@ func newSlick(p string) *Slick {
 		config.WithPrivateMessageWaitTimeMs(0),
 	)
 
-	r, err := NewSlick(c, func() error { return nil })
+	r, err := NewSlick(c, func(*Slick) error { return nil })
 	if err != nil {
 		panic(err)
 	}
