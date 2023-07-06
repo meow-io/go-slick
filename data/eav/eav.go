@@ -260,7 +260,7 @@ func (eav *EAV) SubscribeAfterEntity(cb AfterEntityCallback, includeBackfill boo
 			eav.afterEntitySubscribers[v] = make([]callback[AfterEntityCallback], 0, 1)
 		}
 		eav.afterEntitySubscribers[v] = append(eav.afterEntitySubscribers[v], callback[AfterEntityCallback]{includeBackfill, cb})
-		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns, "")
 		if err != nil {
 			return err
 		}
@@ -275,7 +275,7 @@ func (eav *EAV) SubscribeAfterView(cb AfterViewCallback, includeBackfill bool, v
 			eav.afterViewSubscribers[v] = make([]callback[AfterViewCallback], 0, 1)
 		}
 		eav.afterViewSubscribers[v] = append(eav.afterViewSubscribers[v], callback[AfterViewCallback]{includeBackfill, cb})
-		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns, "")
 		if err != nil {
 			return err
 		}
@@ -290,7 +290,7 @@ func (eav *EAV) SubscribeBeforeEntity(cb BeforeEntityCallback, includeBackfill b
 			eav.beforeEntitySubscribers[v] = make([]callback[BeforeEntityCallback], 0, 1)
 		}
 		eav.beforeEntitySubscribers[v] = append(eav.beforeEntitySubscribers[v], callback[BeforeEntityCallback]{includeBackfill, cb})
-		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns, "")
 		if err != nil {
 			return err
 		}
@@ -305,7 +305,7 @@ func (eav *EAV) SubscribeBeforeView(cb BeforeViewCallback, includeBackfill bool,
 			eav.beforeViewSubscribers[v] = make([]callback[BeforeViewCallback], 0, 1)
 		}
 		eav.beforeViewSubscribers[v] = append(eav.beforeViewSubscribers[v], callback[BeforeViewCallback]{includeBackfill, cb})
-		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns)
+		viewWhereClause, err := eav.buildViewWhereClause(eav.definitions[v].Columns, "")
 		if err != nil {
 			return err
 		}
@@ -317,6 +317,26 @@ func (eav *EAV) SubscribeBeforeView(cb BeforeViewCallback, includeBackfill bool,
 func (eav *EAV) Schema(viewName string) (*ViewDefinition, bool) {
 	d, ok := eav.definitions[viewName]
 	return d, ok
+}
+
+func (eav *EAV) Selectors(viewName, prefix string, columnNames ...string) (string, error) {
+	schema, ok := eav.definitions[viewName]
+	if !ok {
+		return "", fmt.Errorf("view name not found for %s", viewName)
+	}
+	return eav.buildIndexValues(schema.Columns, columnNames, prefix)
+}
+
+func (eav *EAV) IndexWhere(viewName, prefix string) (string, error) {
+	schema, ok := eav.definitions[viewName]
+	if !ok {
+		return "", fmt.Errorf("view name not found for %s", viewName)
+	}
+	viewWhereClause, err := eav.buildViewWhereClause(schema.Columns, prefix)
+	if err != nil {
+		return "", err
+	}
+	return viewWhereClause, nil
 }
 
 func (eav *EAV) CreateView(viewName string, schema *ViewDefinition) error {
@@ -340,7 +360,7 @@ func (eav *EAV) CreateView(viewName string, schema *ViewDefinition) error {
 		}
 	}
 
-	viewWhereClause, err := eav.buildViewWhereClause(schema.Columns)
+	viewWhereClause, err := eav.buildViewWhereClause(schema.Columns, "")
 	if err != nil {
 		return err
 	}
@@ -353,12 +373,13 @@ func (eav *EAV) CreateView(viewName string, schema *ViewDefinition) error {
 	// create any secondary indexes
 	for _, index := range schema.Indexes {
 		eav.log.Debugf("creating index %s on %s", indexPrefix+strings.Join(index, "_"), viewName)
-		indexValues, err := eav.buildIndexValues(index)
+		indexValues, err := eav.buildIndexValues(schema.Columns, index, "")
 		if err != nil {
 			return err
 		}
 		statement := fmt.Sprintf("CREATE INDEX %s%s_%s_idx on _eav_data (%s) WHERE %s", indexPrefix, viewName, strings.Join(index, "_"), indexValues, viewWhereClause)
 		if _, err := eav.db.Tx.Exec(statement); err != nil {
+			fmt.Printf("statement: %s\n", statement)
 			return err
 		}
 	}
@@ -439,7 +460,7 @@ func (eav *EAV) buildColumnDefinitions(columns map[string]*ColumnDefinition) ([]
 	return names, defs, nil
 }
 
-func (eav *EAV) buildViewWhereClause(columns map[string]*ColumnDefinition) (string, error) {
+func (eav *EAV) buildViewWhereClause(columns map[string]*ColumnDefinition, prefix string) (string, error) {
 	nullableNameIDs := make([]uint32, 0, len(columns))
 	nonnullableNameIDs := make([]uint32, 0, len(columns))
 	for _, def := range columns {
@@ -467,41 +488,42 @@ func (eav *EAV) buildViewWhereClause(columns map[string]*ColumnDefinition) (stri
 		for i, nameID := range nullableNameIDs {
 			where[i] = fmt.Sprintf("%d", nameID)
 		}
-		parts = append(parts, fmt.Sprintf("eav_has(value, 1, %s)", strings.Join(where, ", ")))
+		parts = append(parts, fmt.Sprintf("eav_has(%svalue, 1, %s)", prefix, strings.Join(where, ", ")))
 	}
 	if len(nonnullableNameIDs) != 0 {
 		where := make([]string, len(nonnullableNameIDs))
 		for i, nameID := range nonnullableNameIDs {
 			where[i] = fmt.Sprintf("%d", nameID)
 		}
-		parts = append(parts, fmt.Sprintf("eav_has(value, 0, %s)", strings.Join(where, ", ")))
+		parts = append(parts, fmt.Sprintf("eav_has(%svalue, 0, %s)", prefix, strings.Join(where, ", ")))
 	}
 
 	return strings.Join(parts, "AND"), nil
 }
 
-func (eav *EAV) buildIndexValues(indexColumns []string) (string, error) {
+func (eav *EAV) buildIndexValues(columns map[string]*ColumnDefinition, indexColumns []string, prefix string) (string, error) {
 	vals := make([]string, len(indexColumns))
 	for i, col := range indexColumns {
 		var c string
 		switch col {
-		case "id":
-		case "group_id":
-		case "identity_tag":
-		case "membership_tag":
-			c = col
+		case "id", "group_id", "identity_tag", "membership_tag":
+			c = fmt.Sprintf("%s%s", prefix, col)
 		case "_wtime":
-			c = "eav_wtime(value)"
+			c = fmt.Sprintf("eav_wtime(%svalue)", prefix)
 		case "_mtime":
-			c = "eav_mtime(value)"
+			c = fmt.Sprintf("eav_mtime(%svalue)", prefix)
 		case "_ctime":
-			c = "eav_ctime(id)"
+			c = fmt.Sprintf("eav_ctime(%sid)", prefix)
 		default:
-			idx, err := eav.idForName(col)
+			colDef, ok := columns[col]
+			if !ok {
+				return "", fmt.Errorf("expected to find column %s, couldn't find it", col)
+			}
+			idx, err := eav.idForName(colDef.SourceName)
 			if err != nil {
 				return "", err
 			}
-			c = fmt.Sprintf("eav_get(value, %d)", idx)
+			c = fmt.Sprintf("eav_get(%svalue, %d)", prefix, idx)
 		}
 		vals[i] = c
 	}

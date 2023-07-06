@@ -668,6 +668,14 @@ func (s *Slick) eavWrite(id ids.ID, ops *eav.Operations) error {
 	return nil
 }
 
+func (s *Slick) EAVIndexWhere(viewName, prefix string) (string, error) {
+	return s.data.EAV.IndexWhere(viewName, prefix)
+}
+
+func (s *Slick) EAVSelectors(viewName, prefix string, columnNames ...string) (string, error) {
+	return s.data.EAV.Selectors(viewName, prefix, columnNames...)
+}
+
 // Register callback for entities changes before they are committed
 func (s *Slick) EAVSubscribeBeforeEntity(cb func(viewName string, groupID, id ids.ID) error, includeBackfill bool, views ...string) error {
 	return s.DB.Run("subscribe before entity", func() error {
