@@ -43,8 +43,8 @@ github.com/lopezator/migrator v0.3.1 h1:ZFPT6aC7+nGWkqhleynABZ6ftycSf6hmHHLOaryq
 github.com/lopezator/migrator v0.3.1/go.mod h1:X+lHDMZ9Ci3/KdbypJcQYFFwipVrJsX4fRCQ4QLauYk=
 github.com/mattn/go-sqlite3 v1.14.6 h1:dNPt6NO46WmLVt2DLNpwczCmdV5boIZ6g/tlDrlRUbg=
 github.com/mattn/go-sqlite3 v1.14.6/go.mod h1:NyWgC/yNuGj7Q9rpYnZvas74GogHl5/Z4A/KQRfk6bU=
-github.com/meow-io/go-sqlcipher v1.0.1 h1:GlggOFUd2DpEIs9x8N2tJP4nGX2gu5U2AoE8yy67dfk=
-github.com/meow-io/go-sqlcipher v1.0.1/go.mod h1:bWYeC6+9exp90SXBy+AGsmMlhQK9MuT2OEi2iS0t5w8=
+github.com/meow-io/go-sqlcipher v1.0.2 h1:x8hGiUKQYG8maXVcqVYhxc8J2dSuKK7/tkCb7/2CL28=
+github.com/meow-io/go-sqlcipher v1.0.2/go.mod h1:bWYeC6+9exp90SXBy+AGsmMlhQK9MuT2OEi2iS0t5w8=
 github.com/meow-io/heya v0.0.0-20230606080709-8b8c7378db5b h1:sBwrHm86DTwaJifdNhNjCcmvAiFxZGyIGItLmsiCmcU=
 github.com/meow-io/heya v0.0.0-20230606080709-8b8c7378db5b/go.mod h1:eFxX/Qhf0pzgbgDOAw/mxlm2ucPqqGga76qlcf5MrNg=
 github.com/miekg/dns v1.1.27/go.mod h1:KNUDUusw/aVsxyTYZM1oqvCicbwhgbNgztCETuNZ7xM=

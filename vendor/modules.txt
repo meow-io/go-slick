@@ -54,7 +54,7 @@ github.com/lib/pq/scram
 # github.com/lopezator/migrator v0.3.1
 ## explicit; go 1.17
 github.com/lopezator/migrator
-# github.com/meow-io/go-sqlcipher v1.0.1
+# github.com/meow-io/go-sqlcipher v1.0.2
 ## explicit; go 1.12
 github.com/meow-io/go-sqlcipher
 # github.com/meow-io/heya v0.0.0-20230606080709-8b8c7378db5b

@@ -7,7 +7,7 @@ require (
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/joshbuddy/jpake v0.0.0-20230530080604-b04d6e53e4e4
 	github.com/kevinburke/nacl v0.0.0-20210405173606-cd9060f5f776
-	github.com/meow-io/go-sqlcipher v1.0.1
+	github.com/meow-io/go-sqlcipher v1.0.2
 	github.com/meow-io/heya v0.0.0-20230606080709-8b8c7378db5b
 	github.com/status-im/doubleratchet v3.0.0+incompatible
 	github.com/stretchr/testify v1.8.3
