@@ -735,7 +735,7 @@ func (eav *EAV) Query(statement string, args ...interface{}) (*Result, error) {
 }
 
 func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, partial, fromSelf bool) ([]byte, [16]byte, bool, error) {
-	nextID := startFrom
+	nextID := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	values := []interface{}{groupID[:], startFrom[:]}
 	statement := "SELECT id, value from _eav_data where group_id = ? AND ID >= ?"
 	if partial {
