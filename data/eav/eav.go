@@ -59,11 +59,6 @@ type Value struct {
 	Bytes   []byte `bencode:"b"`
 }
 
-type backfill struct {
-	Names []string                                    `bencode:"n"`
-	Data  map[[16]byte]map[uint64]map[uint32][][]byte `bencode:"d"`
-}
-
 func NewValue(src interface{}) *Value {
 	v, err := NewValueWithError(src)
 	if err != nil {
@@ -754,10 +749,8 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 	if fromSelf {
 		applier = Private
 	}
-	names := make(map[uint32]uint32)
-	backfillNames := make([]string, 0)
-	data := map[[16]byte]map[uint64]map[uint32][][]byte{}
 	i := 0
+	ops := NewOperations()
 	// need to also encode the names
 	var v eavData
 	for valueRows.Next() {
@@ -780,29 +773,15 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 			if !eav.checkNameAccess(applier, nameStr) {
 				continue
 			}
-
-			if _, ok := names[nameIdx]; !ok {
-				names[nameIdx] = uint32(len(backfillNames))
-				backfillNames = append(backfillNames, nameStr)
-			}
-
-			if _, ok := data[ids.IDFromBytes(v.ID)]; !ok {
-				data[ids.IDFromBytes(v.ID)] = make(map[uint64]map[uint32][][]byte)
-			}
-			if _, ok := data[ids.IDFromBytes(v.ID)][val.Time]; !ok {
-				data[ids.IDFromBytes(v.ID)][val.Time] = make(map[uint32][][]byte)
-			}
-			data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]] = [][]byte{}
-			if val.Flag&db.NullFlag == 0 {
-				data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]] = append(data[ids.IDFromBytes(v.ID)][val.Time][names[nameIdx]], val.Val)
+			if val.Flag&db.NullFlag != 0 {
+				ops.AddNil(ids.ID(v.ID), val.Time, nameStr)
+			} else {
+				ops.AddBytes(ids.ID(v.ID), val.Time, nameStr, val.Val)
 			}
 		}
 	}
 
-	backfillBytes, err := bencode.Serialize(&backfill{
-		Names: backfillNames,
-		Data:  data,
-	})
+	backfillBytes, err := bencode.Serialize(ops)
 	if err != nil {
 		return nil, nextID, false, err
 	}
@@ -810,30 +789,9 @@ func (eav *EAV) Backfill(groupID ids.ID, authorTag [7]byte, startFrom [16]byte, 
 }
 
 func (eav *EAV) ProcessBackfill(groupID ids.ID, applier uint8, body []byte) error {
-	backfill := backfill{}
-	if err := bencode.Deserialize(body, &backfill); err != nil {
+	ops := &Operations{}
+	if err := bencode.Deserialize(body, ops); err != nil {
 		return err
-	}
-
-	ops := NewOperations()
-	ops.fromBackfill = true
-	for id, v := range backfill.Data {
-		for ts, valuesMap := range v {
-			for nameIdx, values := range valuesMap {
-				name := backfill.Names[nameIdx]
-				if !eav.checkNameAccess(applier, name) {
-					continue
-				}
-				switch len(values) {
-				case 0:
-					ops.AddNil(id, ts, name)
-				case 1:
-					ops.AddBytes(id, ts, name, values[0])
-				default:
-					return fmt.Errorf("expected values to be 0 or 1 long, is %d", len(values))
-				}
-			}
-		}
 	}
 	if _, _, err := eav.apply(groupID, applier, ops, true); err != nil {
 		return err

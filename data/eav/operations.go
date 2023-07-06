@@ -10,8 +10,6 @@ import (
 type Operations struct {
 	Names        []string                               `bencode:"n"`
 	OperationMap map[uint64]map[ids.ID]map[uint32]Value `bencode:"m"`
-
-	fromBackfill bool
 	nameMap      map[string]uint32
 }
 
