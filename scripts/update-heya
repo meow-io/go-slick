@@ -4,6 +4,3 @@ set -e
 
 go get github.com/meow-io/heya@latest
 go mod vendor
-
-# for now, we need to keep out local change intact
-git checkout vendor/github.com/egagnon77/go-sqlcipher/v4/sqlite3.go

@@ -34,6 +34,8 @@ func (s sortedValues) Less(i, j int) bool {
 		}
 	case reflect.String:
 		return s[i].String() < s[j].String()
+	case reflect.Uint32:
+		return s[i].Uint() < s[j].Uint()
 	case reflect.Uint64:
 		return s[i].Uint() < s[j].Uint()
 	default:

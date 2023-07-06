@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/meow-io/go-slick/clock"
 	"github.com/meow-io/go-slick/config"
 	db "github.com/meow-io/go-slick/internal/db"
 )
@@ -58,7 +59,7 @@ func testCleanup() {
 func NewTestDatabase(c *config.Config) *db.Database {
 	id := newID()
 	path := fmt.Sprintf("test-%x", id[:])
-	db, err := db.NewDatabase(c, path)
+	db, err := db.NewDatabase(c, clock.NewSystemClock(), path)
 	if err != nil {
 		panic(err)
 	}

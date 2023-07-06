@@ -137,9 +137,8 @@ func NewPin() (string, error) {
 }
 
 type Slick struct {
-	DeviceGroup *deviceGroup
-	DB          *db.Database
-
+	DeviceGroup        *deviceGroup
+	DB                 *db.Database
 	lastTimestamp      uint64
 	timeVersion        uint8
 	config             *config.Config
@@ -149,15 +148,16 @@ type Slick struct {
 	messaging          *messaging.Manager
 	transport          *transport.Manager
 	data               *data.Manager
-	updates            chan interface{}
+	updates            []chan interface{}
 	cancelFunc         context.CancelFunc
 	finished           sync.WaitGroup
 	transportStates    map[string]string
 	transportStateLock sync.Mutex
+	applicationInit    func(s *Slick) error
 }
 
 // Create a slick instance
-func NewSlick(c *config.Config) (*Slick, error) {
+func NewSlick(c *config.Config, applicationInit func(s *Slick) error) (*Slick, error) {
 	log := c.Logger("")
 	absRootPath, err := filepath.Abs(c.RootDir)
 	if err != nil {
@@ -169,7 +169,8 @@ func NewSlick(c *config.Config) (*Slick, error) {
 	if err := os.MkdirAll(c.RootDir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := db.NewDatabase(c, path.Join(c.RootDir, "data"))
+	cl := clock.NewSystemClock()
+	db, err := db.NewDatabase(c, cl, path.Join(c.RootDir, "data"))
 	if err != nil {
 		return nil, err
 	}
@@ -190,9 +191,10 @@ func NewSlick(c *config.Config) (*Slick, error) {
 		messaging:       nil,
 		transport:       nil,
 		data:            nil,
-		updates:         make(chan interface{}, 100),
+		updates:         make([]chan interface{}, 0),
 		DB:              db,
 		transportStates: make(map[string]string),
+		applicationInit: applicationInit,
 	}
 
 	return slick, nil
@@ -228,8 +230,10 @@ func (s *Slick) NewID(authorTag [7]byte) (ids.ID, error) {
 
 // Gets various updates which must be dealt with.
 // This will either produce *GroupUpdate, *eav.TableRowUpdate, *eav.TableRowInsert or *eav.TableUpdate
-func (s *Slick) Updates() chan interface{} {
-	return s.updates
+func (s *Slick) Updates() <-chan interface{} {
+	c := make(chan interface{}, 100)
+	s.updates = append(s.updates, c)
+	return c
 }
 
 // Returns true is slick is in NEW state.
@@ -281,7 +285,7 @@ func (s *Slick) GetMessages(key []byte) error {
 		case <-done:
 		case <-time.After(10 * time.Second):
 		}
-		s.updates <- &MessagesFetchedUpdate{}
+		s.update(&MessagesFetchedUpdate{})
 	}()
 
 	// open
@@ -369,6 +373,10 @@ INSERT INTO _time_id_gen (id, time_version) values(1, 0);
 		return err
 	}
 
+	if err := s.applicationInit(s); err != nil {
+		return err
+	}
+
 	ctx, cancelFunc := context.WithCancel(context.Background())
 	s.cancelFunc = cancelFunc
 	if err := s.transport.Start(); err != nil {
@@ -386,8 +394,8 @@ INSERT INTO _time_id_gen (id, time_version) values(1, 0);
 	if err != nil {
 		return err
 	}
-	s.DeviceGroup = deviceGroup
 
+	s.DeviceGroup = deviceGroup
 	s.setState(StateRunning)
 	s.startUpdatePassing(ctx)
 	return nil
@@ -459,9 +467,10 @@ func (s *Slick) Shutdown() error {
 
 	s.setState(StateInitialized)
 
-	close(s.updates)
-	s.updates = make(chan interface{}, 100)
-
+	for _, c := range s.updates {
+		close(c)
+	}
+	s.updates = make([]chan interface{}, 0)
 	return nil
 }
 
@@ -582,22 +591,14 @@ func (s *Slick) GroupState(groupID ids.ID) (*GroupUpdate, error) {
 	return update, err
 }
 
-// Creates a single table in the EAV database.
-func (s *Slick) EAVCreateTable(tablename string, def *eav.TableDefinition) error {
-	return s.data.EAV.CreateTable(tablename, def)
-}
-
-func (s *Slick) EAVCreateTables(tables map[string]*eav.TableDefinition) error {
-	for tablename, def := range tables {
-		if err := s.data.EAV.CreateTable(tablename, def); err != nil {
+// Creates multiple views in the EAV database.
+func (s *Slick) EAVCreateViews(views map[string]*eav.ViewDefinition) error {
+	for viewname, def := range views {
+		if err := s.data.EAV.CreateView(viewname, def); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (s *Slick) EAVTableAddColumns(tablename string, cols map[string]*eav.ColumnDefinition) error {
-	return s.data.EAV.AlterTableAddColumns(tablename, cols)
 }
 
 // Write to the EAV database.
@@ -667,6 +668,42 @@ func (s *Slick) eavWrite(id ids.ID, ops *eav.Operations) error {
 	return nil
 }
 
+func (s *Slick) EAVIndexWhere(viewName, prefix string) (string, error) {
+	return s.data.EAV.IndexWhere(viewName, prefix)
+}
+
+func (s *Slick) EAVSelectors(viewName, prefix string, columnNames ...string) (string, error) {
+	return s.data.EAV.Selectors(viewName, prefix, columnNames...)
+}
+
+// Register callback for entities changes before they are committed
+func (s *Slick) EAVSubscribeBeforeEntity(cb func(viewName string, groupID, id ids.ID) error, includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe before entity", func() error {
+		return s.data.EAV.SubscribeBeforeEntity(cb, includeBackfill, views...)
+	})
+}
+
+// Register callback for entities changes after they are committed
+func (s *Slick) EAVSubscribeAfterEntity(cb func(viewName string, groupID, id ids.ID), includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe after entity", func() error {
+		return s.data.EAV.SubscribeAfterEntity(cb, includeBackfill, views...)
+	})
+}
+
+// Register callback for view changes before they are committed
+func (s *Slick) EAVSubscribeBeforeView(cb func(viewName string) error, includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe before view", func() error {
+		return s.data.EAV.SubscribeBeforeView(cb, includeBackfill, views...)
+	})
+}
+
+// Register callback for view changes after they are committed
+func (s *Slick) EAVSubscribeAfterView(cb func(viewName string), includeBackfill bool, views ...string) error {
+	return s.DB.Run("subscribe after view", func() error {
+		return s.data.EAV.SubscribeAfterView(cb, includeBackfill, views...)
+	})
+}
+
 // Query the EAV database with a SQL statement.
 func (s *Slick) EAVQuery(query string, vars ...interface{}) (*eav.Result, error) {
 	var res *eav.Result
@@ -699,7 +736,8 @@ func (s *Slick) EAVGet(dest interface{}, query string, vars ...interface{}) erro
 }
 
 func (s *Slick) getEAV(dest interface{}, query string, vars ...interface{}) error {
-	return s.data.EAV.Get(dest, query, vars...)
+	err := s.data.EAV.Get(dest, query, vars...)
+	return err
 }
 
 func (s *Slick) startUpdatePassing(ctx context.Context) {
@@ -712,7 +750,7 @@ func (s *Slick) startUpdatePassing(ctx context.Context) {
 				return
 			case e := <-s.data.Updates():
 				s.log.Debugf("passing update: data %#v", e)
-				s.updates <- e
+				s.update(e)
 			case e := <-s.transport.Updates():
 				switch v := e.(type) {
 				case *heya.StateUpdate:
@@ -722,13 +760,13 @@ func (s *Slick) startUpdatePassing(ctx context.Context) {
 					s.transportStateLock.Unlock()
 					tsu := &TransportStateUpdate{URL: url, State: v.State}
 					s.log.Debugf("passing update: transport state %#v", tsu)
-					s.updates <- tsu
+					s.update(e)
 				}
 			case e := <-s.messaging.Updates():
 				switch v := e.(type) {
 				case *messaging.GroupUpdate:
 					s.log.Debugf("passing update: group update %#v", v)
-					s.updates <- &GroupUpdate{
+					s.update(&GroupUpdate{
 						ID:                   v.GroupID,
 						AckedMemberCount:     v.AckedMemberCount,
 						GroupState:           v.GroupState,
@@ -736,27 +774,27 @@ func (s *Slick) startUpdatePassing(ctx context.Context) {
 						ConnectedMemberCount: v.ConnectedMemberCount,
 						Seq:                  v.Seq,
 						PendingMessageCount:  v.PendingMessageCount,
-					}
+					})
 				case *messaging.IntroFailed:
 					s.log.Debugf("passing update: intro failed %#v", v)
-					s.updates <- &GroupUpdate{
+					s.update(&GroupUpdate{
 						ID:         v.GroupID,
 						GroupState: IntroFailed,
-					}
+					})
 				case *messaging.IntroSucceeded:
 					s.log.Debugf("passing update: intro succeeded %#v", v)
-					s.updates <- &GroupUpdate{
+					s.update(&GroupUpdate{
 						ID:         v.GroupID,
 						GroupState: IntroSucceeded,
-					}
+					})
 				case *messaging.IntroUpdate:
 					s.log.Debugf("passing update: intro update %#v", v)
-					s.updates <- &IntroUpdate{
+					s.update(&IntroUpdate{
 						GroupID:   v.GroupID,
 						Stage:     v.Stage,
 						Initiator: v.Initiator,
 						Type:      v.Type,
-					}
+					})
 				default:
 					s.log.Infof("Unpassed event %#v", e)
 				}
@@ -781,7 +819,7 @@ func (s *Slick) Transports() *Transports {
 
 func (s *Slick) setState(state int) {
 	s.state = state
-	s.updates <- &AppState{state}
+	s.update(&AppState{state})
 }
 
 func (s *Slick) loadTimeVersion() error {
@@ -800,8 +838,15 @@ func (s *Slick) loadTimeVersion() error {
 	})
 }
 
-func (s *Slick) beforeApplyViewEAV(table string, cb func(groupID, entityID ids.ID) error) {
-	s.data.EAV.BeforeApplyView(table, cb)
+func (s *Slick) update(e interface{}) {
+	for _, c := range s.updates {
+		select {
+		case c <- e:
+			// do nothing
+		default:
+			s.log.Warnf("update not sent, channel full: %#v", e)
+		}
+	}
 }
 
 func (s *Slick) membershipUpdater() messaging.MembershipUpdater {

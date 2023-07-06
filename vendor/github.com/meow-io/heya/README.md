@@ -7,10 +7,11 @@ A communication protocol & server for sending and receiving messages.
 * Support binary data
 * Transport encryption
 * Sender anonymity
+* Application agnostic
 
 ### Anti-goals
 
-* Specify application behavior
+* Server-side indexing
 * At-rest encryption for message data
 
 ## Concepts
@@ -166,11 +167,6 @@ To close the connection the client sends `QUIT`. This closes the conenction and 
 soemthing something about running the server. path to APN certification here
 
 ## Alternatives considered
-
-### Kafka
-
-* not suitable for direct exposure to internet
-* no ability to send ios push notifications
 
 ### Email
 

@@ -36,7 +36,7 @@ func newSlick(p string) *Slick {
 		config.WithPrivateMessageWaitTimeMs(0),
 	)
 
-	r, err := NewSlick(c)
+	r, err := NewSlick(c, func(*Slick) error { return nil })
 	if err != nil {
 		panic(err)
 	}
@@ -113,31 +113,31 @@ func TestTwoPartySlick(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return s1.EAVCreateTable("messages", &eav.TableDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"body": {
-							SourceName:   "body",
-							ColumnType:   eav.Text,
-							DefaultValue: eav.NewBytesValue([]byte("something")),
-							Required:     true,
-							Nullable:     false,
+				return s1.EAVCreateViews(map[string]*eav.ViewDefinition{
+					"messages": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"body": {
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
+							},
+							"published_at": {
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
+							},
+							"read": {
+								SourceName:   "_self_read",
+								ColumnType:   eav.Int,
+								DefaultValue: eav.NewBytesValue([]byte("0")),
+								Required:     false,
+								Nullable:     false,
+							},
 						},
-						"published_at": {
-							SourceName:   "published_at",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     true,
-							Nullable:     false,
-						},
-						"read": {
-							SourceName:   "_self_read",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     false,
-							Nullable:     false,
-						},
+						Indexes: [][]string{{"published_at"}},
 					},
-					Indexes: [][]string{{"published_at"}},
 				})
 			},
 		},
@@ -174,32 +174,31 @@ func TestTwoPartySlick(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return s2.EAVCreateTable("messages", &eav.TableDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"body": {
-							SourceName:   "body",
-							ColumnType:   eav.Text,
-							DefaultValue: eav.NewBytesValue([]byte("something")),
-							Required:     true,
-							Nullable:     false,
+				return s2.EAVCreateViews(map[string]*eav.ViewDefinition{
+					"messages": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"body": {
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
+							},
+							"published_at": {
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
+							},
+							"read": {
+								SourceName:   "_self_read",
+								ColumnType:   eav.Int,
+								DefaultValue: eav.NewBytesValue([]byte("0")),
+								Required:     false,
+								Nullable:     false,
+							},
 						},
-						"published_at": {
-							SourceName:   "published_at",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     true,
-							Nullable:     false,
-						},
-						"read": {
-							SourceName:   "_self_read",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     false,
-							Nullable:     false,
-						},
-					},
-					Indexes: [][]string{{"published_at"}},
-				})
+						Indexes: [][]string{{"published_at"}},
+					}})
 			},
 		},
 	}))
@@ -253,9 +252,9 @@ func TestLargeBackfill(t *testing.T) {
 
 	for i := 0; i != 9; i++ {
 		ops := eav.NewOperations()
-		id, err := s1.NewID(s1groups[0].AuthorTag)
-		require.Nil(err)
 		for j := 0; j != 1001; j++ {
+			id, err := s1.NewID(s1groups[0].AuthorTag)
+			require.Nil(err)
 			ops.AddString(id, ts, fmt.Sprintf("attr-%d", j), "hi there")
 		}
 		require.Nil(s1.EAVWrite(s1groups[0].ID, ops))
@@ -308,32 +307,31 @@ func TestDeviceGroupJoining(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return s1.EAVCreateTable("messages", &eav.TableDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"body": {
-							SourceName:   "body",
-							ColumnType:   eav.Text,
-							DefaultValue: eav.NewBytesValue([]byte("something")),
-							Required:     true,
-							Nullable:     false,
+				return s1.EAVCreateViews(map[string]*eav.ViewDefinition{
+					"messages": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"body": {
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
+							},
+							"published_at": {
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
+							},
+							"read": {
+								SourceName:   "_self_read",
+								ColumnType:   eav.Int,
+								DefaultValue: eav.NewBytesValue([]byte("0")),
+								Required:     false,
+								Nullable:     false,
+							},
 						},
-						"published_at": {
-							SourceName:   "published_at",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     true,
-							Nullable:     false,
-						},
-						"read": {
-							SourceName:   "_self_read",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     false,
-							Nullable:     false,
-						},
-					},
-					Indexes: [][]string{{"published_at"}},
-				})
+						Indexes: [][]string{{"published_at"}},
+					}})
 			},
 		},
 	}))
@@ -425,31 +423,31 @@ func TestDeviceGroupJoining(t *testing.T) {
 		{
 			Name: "init",
 			Func: func(*sql.Tx) error {
-				return r2.EAVCreateTable("messages", &eav.TableDefinition{
-					Columns: map[string]*eav.ColumnDefinition{
-						"body": {
-							SourceName:   "body",
-							ColumnType:   eav.Text,
-							DefaultValue: eav.NewBytesValue([]byte("something")),
-							Required:     true,
-							Nullable:     false,
+				return r2.EAVCreateViews(map[string]*eav.ViewDefinition{
+					"messages": &eav.ViewDefinition{
+						Columns: map[string]*eav.ColumnDefinition{
+							"body": {
+								SourceName: "body",
+								ColumnType: eav.Text,
+								Required:   true,
+								Nullable:   false,
+							},
+							"published_at": {
+								SourceName: "published_at",
+								ColumnType: eav.Int,
+								Required:   true,
+								Nullable:   false,
+							},
+							"read": {
+								SourceName:   "_self_read",
+								ColumnType:   eav.Int,
+								DefaultValue: eav.NewBytesValue([]byte("0")),
+								Required:     false,
+								Nullable:     false,
+							},
 						},
-						"published_at": {
-							SourceName:   "published_at",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     true,
-							Nullable:     false,
-						},
-						"read": {
-							SourceName:   "_self_read",
-							ColumnType:   eav.Int,
-							DefaultValue: eav.NewBytesValue([]byte("0")),
-							Required:     false,
-							Nullable:     false,
-						},
+						Indexes: [][]string{{"published_at"}},
 					},
-					Indexes: [][]string{{"published_at"}},
 				})
 			},
 		},

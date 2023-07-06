@@ -13,9 +13,10 @@ import (
 	"time"
 
 	// adds sqlcipher support
-	_ "github.com/egagnon77/go-sqlcipher/v4"
+	"github.com/meow-io/go-slick/clock"
 	"github.com/meow-io/go-slick/config"
 	"github.com/meow-io/go-slick/migration"
+	sqlite3 "github.com/meow-io/go-sqlcipher"
 	"go.uber.org/zap"
 
 	"github.com/jmoiron/sqlx"
@@ -29,12 +30,13 @@ const (
 	stateClosed
 )
 
-type runnerFunc func() error
+type RunnerFunc func() error
 
 type Database struct {
-	Log  *zap.SugaredLogger
-	Conn *sqlx.DB
-	Tx   *sqlx.Tx
+	Log        *zap.SugaredLogger
+	Conn       *sqlx.DB
+	Tx         *sqlx.Tx
+	EAVHandler *EAV
 
 	config                *config.Config
 	state                 int
@@ -46,7 +48,9 @@ type Database struct {
 	cancelFn              context.CancelFunc
 }
 
-func NewDatabase(c *config.Config, path string) (*Database, error) {
+var currentDB *Database
+
+func NewDatabase(c *config.Config, cl clock.Clock, path string) (*Database, error) {
 	log := c.Logger("db")
 	log.Debugf("making database at %s", path)
 
@@ -63,7 +67,24 @@ func NewDatabase(c *config.Config, path string) (*Database, error) {
 	}
 
 	ctx, cancelFn := context.WithCancel(context.TODO())
-	db := &Database{Conn: nil, Log: log, config: c, path: path, state: state, lock: &sync.Mutex{}, ctx: ctx, cancelFn: cancelFn}
+	db := &Database{
+		Conn: nil,
+		Log:  log,
+		EAVHandler: &EAV{
+			Clock: cl,
+			callback: func(viewName string, phase int, groupID, id []byte) error {
+				return nil
+			},
+		},
+		lock:     &sync.Mutex{},
+		config:   c,
+		path:     path,
+		state:    state,
+		ctx:      ctx,
+		cancelFn: cancelFn,
+	}
+	currentDB = db
+	db.registerDriver()
 	return db, nil
 }
 
@@ -161,7 +182,7 @@ func (db *Database) AfterCommit(f func()) {
 	db.callbacks = append(db.callbacks, f)
 }
 
-func (db *Database) BeforeCommit(f runnerFunc) {
+func (db *Database) BeforeCommit(f RunnerFunc) {
 	if db.Tx == nil {
 		panic("db: expected tx to be not nil")
 	}
@@ -169,7 +190,7 @@ func (db *Database) BeforeCommit(f runnerFunc) {
 	db.beforeCommitCallbacks = append(db.beforeCommitCallbacks, f)
 }
 
-func (db *Database) Lock(label string, runner runnerFunc) error {
+func (db *Database) Lock(label string, runner RunnerFunc) error {
 	start := time.Now()
 	db.Log.Debugf("Starting %s", label)
 	db.lock.Lock()
@@ -182,7 +203,7 @@ func (db *Database) Lock(label string, runner runnerFunc) error {
 	return runner()
 }
 
-func (db *Database) runTx(label string, txOptions *sql.TxOptions, runner runnerFunc) error {
+func (db *Database) RunTx(label string, txOptions *sql.TxOptions, runner RunnerFunc) error {
 	if db.Tx != nil {
 		panic("db: expected tx to be nil")
 	}
@@ -233,21 +254,21 @@ func (db *Database) runTx(label string, txOptions *sql.TxOptions, runner runnerF
 	return nil
 }
 
-func (db *Database) Run(label string, runner runnerFunc) error {
+func (db *Database) Run(label string, runner RunnerFunc) error {
 	return db.Lock(label, func() error {
-		return db.runTx(label, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: false}, runner)
+		return db.RunTx(label, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: false}, runner)
 	})
 }
 
-func (db *Database) RunReadOnly(label string, runner runnerFunc) error {
+func (db *Database) RunReadOnly(label string, runner RunnerFunc) error {
 	return db.Lock(label, func() error {
-		return db.runTx(label, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true}, runner)
+		return db.RunTx(label, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true}, runner)
 	})
 }
 
 func (db *Database) setupConnection(key []byte) (*sqlx.DB, error) {
 	formattedPath := fmt.Sprintf("file:%s?_locking_mode=EXCLUSIVE&_busy_timeout=100&_secure_delete=on&_journal_mode=WAL&_auto_vacuum=2&_synchronous=3&cache=private&mode=rwc&_pragma_key=x'%x'", url.PathEscape(db.path), key)
-	conn, err := sqlx.Open("sqlite3", formattedPath)
+	conn, err := sqlx.Open("sqlite3_slick", formattedPath)
 	if err != nil {
 		return nil, fmt.Errorf("db: error opening %s %w", db.path, err)
 	}
@@ -267,4 +288,42 @@ func (db *Database) setupConnection(key []byte) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("db: error setting foreign_keys to ON: %w", err)
 	}
 	return conn, nil
+}
+
+func (db *Database) registerDriver() {
+	drivers := sql.Drivers()
+	for _, d := range drivers {
+		if d == "sqlite3_slick" {
+			return
+		}
+	}
+	sql.Register("sqlite3_slick",
+		&sqlite3.SQLiteDriver{
+			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+				if err := conn.RegisterFunc("eav_get", currentDB.EAVHandler.eavGet, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_set", currentDB.EAVHandler.eavSet, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_has", currentDB.EAVHandler.eavHas, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_mtime", currentDB.EAVHandler.eavMtime, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_ctime", currentDB.EAVHandler.eavCtime, true); err != nil {
+					return err
+				}
+				if err := conn.RegisterFunc("eav_wtime", currentDB.EAVHandler.eavWtime, true); err != nil {
+					return err
+				}
+				return conn.RegisterFunc("eav_cb", func(viewName string, phase int, groupID, id []byte) string {
+					if err := currentDB.EAVHandler.callback(viewName, phase, groupID, id); err != nil {
+						return err.Error()
+					}
+					return ""
+				}, true)
+			},
+		})
 }
