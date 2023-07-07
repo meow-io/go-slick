@@ -36,6 +36,11 @@ type BeforeViewCallback func(viewName string) error
 type AfterEntityCallback func(viewName string, groupID, id ids.ID)
 type AfterViewCallback func(viewName string)
 
+type sqliteMaster struct {
+	SQL  string `db:"sql"`
+	Name string `db:"name"`
+}
+
 type callback[T any] struct {
 	includeBackfill bool
 	cb              T
@@ -335,54 +340,77 @@ func (eav *EAV) IndexWhere(viewName, prefix string) (string, error) {
 }
 
 func (eav *EAV) CreateView(viewName string, schema *ViewDefinition) error {
+	_, _, err := eav.CreateViewWithCounts(viewName, schema)
+	return err
+}
+
+func (eav *EAV) CreateViewWithCounts(viewName string, schema *ViewDefinition) (int, int, error) {
+	var createIndexCount, dropIndexCount int
 	// drop existing view
 	eav.log.Debugf("rebuilding view for %s", viewName)
 	if _, err := eav.db.Tx.Exec(fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName)); err != nil {
-		return err
+		return createIndexCount, dropIndexCount, err
 	}
 
 	indexPrefix := fmt.Sprintf("_idx_eav_%s__", viewName)
 
+	newIndexes := make(map[string]string)
+	oldIndexes := make(map[string]string)
 	// drop existing indexes related to view
-	var indexes []string
-	if err := eav.db.Tx.Select(&indexes, "select name from sqlite_master where type = ? and name like ?", "index", indexPrefix+"%"); err != nil {
-		return err
+	var indexes []*sqliteMaster
+	if err := eav.db.Tx.Select(&indexes, "select name, sql from sqlite_master where type = ? and name like ?", "index", indexPrefix+"%"); err != nil {
+		return createIndexCount, dropIndexCount, err
 	}
-
-	for _, name := range indexes {
-		if _, err := eav.db.Tx.Exec(fmt.Sprintf("drop index %s", name)); err != nil {
-			return err
-		}
+	for _, i := range indexes {
+		oldIndexes[i.Name] = i.SQL
 	}
 
 	viewWhereClause, err := eav.buildViewWhereClause(schema.Columns, "")
 	if err != nil {
-		return err
+		return createIndexCount, dropIndexCount, err
 	}
 
 	// create the "primary key" view index
-	if _, err := eav.db.Tx.Exec(fmt.Sprintf("create index %s on _eav_data (group_id, id) WHERE %s", indexPrefix+"_pk", viewWhereClause)); err != nil {
-		return err
-	}
-
+	newIndexes[indexPrefix+"_pk"] = fmt.Sprintf("CREATE INDEX %s on _eav_data (group_id, id) WHERE %s", indexPrefix+"_pk", viewWhereClause)
 	// create any secondary indexes
 	for _, index := range schema.Indexes {
 		eav.log.Debugf("creating index %s on %s", indexPrefix+strings.Join(index, "_"), viewName)
 		indexValues, err := eav.buildIndexValues(schema.Columns, index, "")
 		if err != nil {
-			return err
+			return createIndexCount, dropIndexCount, err
 		}
-		statement := fmt.Sprintf("CREATE INDEX %s%s_%s_idx on _eav_data (%s) WHERE %s", indexPrefix, viewName, strings.Join(index, "_"), indexValues, viewWhereClause)
-		if _, err := eav.db.Tx.Exec(statement); err != nil {
-			fmt.Printf("statement: %s\n", statement)
-			return err
+		indexName := fmt.Sprintf("%s%s_%s_idx", indexPrefix, viewName, strings.Join(index, "_"))
+		statement := fmt.Sprintf("CREATE INDEX %s on _eav_data (%s) WHERE %s", indexName, indexValues, viewWhereClause)
+		newIndexes[indexName] = statement
+	}
+
+	for name, sql := range newIndexes {
+		if oldSQL, ok := oldIndexes[name]; ok {
+			delete(oldIndexes, name)
+			if oldSQL == sql {
+				continue
+			}
+			if _, err := eav.db.Tx.Exec(fmt.Sprintf("drop index %s", name)); err != nil {
+				return createIndexCount, dropIndexCount, err
+			}
+			dropIndexCount++
 		}
+		if _, err := eav.db.Tx.Exec(sql); err != nil {
+			return createIndexCount, dropIndexCount, err
+		}
+		createIndexCount++
+	}
+	for name := range oldIndexes {
+		if _, err := eav.db.Tx.Exec(fmt.Sprintf("drop index %s", name)); err != nil {
+			return createIndexCount, dropIndexCount, err
+		}
+		dropIndexCount++
 	}
 
 	// create the view itself
 	columnNames, columnDefinitions, err := eav.buildColumnDefinitions(schema.Columns)
 	if err != nil {
-		return err
+		return createIndexCount, dropIndexCount, err
 	}
 
 	createViewStatement := fmt.Sprintf(`CREATE VIEW %s (
@@ -396,10 +424,10 @@ func (eav *EAV) CreateView(viewName string, schema *ViewDefinition) error {
 	)
 
 	if _, err := eav.db.Tx.Exec(createViewStatement); err != nil {
-		return err
+		return createIndexCount, dropIndexCount, err
 	}
 
-	return eav.saveDefintion(viewName, schema)
+	return createIndexCount, dropIndexCount, eav.saveDefintion(viewName, schema)
 }
 
 func (eav *EAV) buildColumnDefinitions(columns map[string]*ColumnDefinition) ([]string, []string, error) {

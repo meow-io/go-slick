@@ -608,7 +608,7 @@ func TestAlterTable(t *testing.T) {
 		return nil
 	}))
 	require.Nil(eav.db.Run("testing", func() error {
-		require.Nil(eav.CreateView("messages", &ViewDefinition{
+		createCount, dropCount, err := eav.CreateViewWithCounts("messages", &ViewDefinition{
 			Columns: map[string]*ColumnDefinition{
 				"body": {
 					SourceName: "message_body",
@@ -634,8 +634,11 @@ func TestAlterTable(t *testing.T) {
 					Nullable:   true,
 				},
 			},
-			Indexes: [][]string{{"body"}},
-		}))
+			Indexes: [][]string{{"body"}, {"height"}},
+		})
+		require.Nil(err)
+		require.Equal(1, createCount)
+		require.Equal(0, dropCount)
 		return nil
 	}))
 
@@ -658,7 +661,114 @@ func TestAlterTable(t *testing.T) {
 	def, err := eav.loadDefinitions()
 	require.Nil(err)
 	require.Equal(4, len(def["messages"].Columns))
-	require.Equal(1, len(def["messages"].Indexes))
+	require.Equal(2, len(def["messages"].Indexes))
+}
+
+func TestAlterTablePK(t *testing.T) {
+	require := require.New(t)
+	eav := newEAV()
+	defer shutdownEAV(eav)
+
+	require.Nil(eav.db.Run("testing", func() error {
+		entityID := NewID([7]byte{1, 2, 3, 4, 5, 6, 7})
+		_, _, err := eav.Apply(groupID, Self, NewOperations().
+			AddString(entityID, 0, "message_body", "hi there").
+			AddBytes(entityID, 0, "message_blob", []byte{0, 1, 2, 3}).
+			AddInt64(entityID, 0, "message_age", 23).
+			AddFloat64(entityID, 0, "message_height", 23.23))
+		require.Nil(err)
+		require.Nil(eav.CreateView("messages", &ViewDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+				"age": {
+					SourceName: "message_age",
+					ColumnType: Int,
+					Required:   true,
+					Nullable:   false,
+				},
+				"blob": {
+					SourceName: "message_blob",
+					ColumnType: Blob,
+					Required:   true,
+					Nullable:   false,
+				},
+			},
+			Indexes: [][]string{{"body"}},
+		}))
+
+		type messageWithoutHeight struct {
+			ID   []byte `db:"id"`
+			Body string `db:"body"`
+			Age  int    `db:"age"`
+			Blob []byte `db:"blob"`
+		}
+		var messagesWithoutHeight []*messageWithoutHeight
+		require.Nil(eav.Select(&messagesWithoutHeight, "select id, body, age, blob from messages"))
+		require.Equal(1, len(messagesWithoutHeight))
+		require.Equal("hi there", messagesWithoutHeight[0].Body)
+		return nil
+	}))
+	require.Nil(eav.db.Run("testing", func() error {
+		createCount, dropCount, err := eav.CreateViewWithCounts("messages", &ViewDefinition{
+			Columns: map[string]*ColumnDefinition{
+				"body": {
+					SourceName: "message_body",
+					ColumnType: Text,
+					Required:   true,
+					Nullable:   false,
+				},
+				"age": {
+					SourceName: "message_age",
+					ColumnType: Int,
+					Required:   true,
+					Nullable:   false,
+				},
+				"blob": {
+					SourceName: "message_blob",
+					ColumnType: Blob,
+					Required:   true,
+					Nullable:   false,
+				},
+				"height": {
+					SourceName: "message_height",
+					ColumnType: Real,
+					Required:   true,
+					Nullable:   false,
+				},
+			},
+			Indexes: [][]string{{"body"}, {"height"}},
+		})
+		require.Nil(err)
+		require.Equal(3, createCount)
+		require.Equal(2, dropCount)
+		return nil
+	}))
+
+	require.Nil(eav.db.Run("testing", func() error {
+		type message struct {
+			ID     []byte  `db:"id"`
+			Body   string  `db:"body"`
+			Age    int     `db:"age"`
+			Height float64 `db:"height"`
+			Blob   []byte  `db:"blob"`
+		}
+		var messages []*message
+		require.Nil(eav.Select(&messages, "select id, body, age, height, blob from messages"))
+		require.Equal(1, len(messages))
+		require.Equal("hi there", messages[0].Body)
+		require.Equal(23.23, messages[0].Height)
+
+		return nil
+	}))
+	def, err := eav.loadDefinitions()
+	require.Nil(err)
+	require.Equal(4, len(def["messages"].Columns))
+	require.Equal(2, len(def["messages"].Indexes))
 }
 
 func TestUnicodeRoundtrip(t *testing.T) {
